@@ -1,0 +1,4 @@
+flask>=3.0
+gunicorn>=22.0
+line-bot-sdk>=3.11
+anthropic>=0.40
