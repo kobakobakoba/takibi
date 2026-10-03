@@ -30,7 +30,7 @@
 
 1. Render で「New」→「Web Service」を選び、このリポジトリを選択
 2. Build Command: `pip install -r requirements.txt`
-3. Start Command: `gunicorn main:app`
+3. Start Command: `gunicorn main:app --workers 1 --threads 4`（会話をメモリで持つため、ワーカーは1つにする）
 4. Environment に上の環境変数を登録してデプロイ
 
 ## LINE側の設定
