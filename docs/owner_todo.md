@@ -7,7 +7,7 @@
 - [ ] チャットに貼ったClaudeのAPIキーを削除し、作り直してRenderの環境変数に設定する
 - [ ] Claude ConsoleのBillingで、月の利用上限を低めに設定する（例：1,000円相当）
 - [ ] cron-job.orgで `https://（RenderのURL）/` に10分おきにアクセスする設定を作る
-- [ ] LINE公式アカウントのアイコンを `profile_icon.png` に変える
+- [x] LINE公式アカウントのアイコンを `profile_icon.png` に変える（2026-10-04 対応済み）
 - [ ] LINE公式アカウントの名前と紹介文を「育児・介護の愚痴を燃やす焚き火」向けに変える
 
 ## 収益化を始めるとき
