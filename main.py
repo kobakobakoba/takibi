@@ -60,6 +60,25 @@ SAFETY = """安全（最優先）:
 
 SYSTEM_PROMPT = PERSONA + "\n" + SAFETY
 
+# 応援リンクを出さないための目印（SAFETYブロックの外。会話内容は保存せず、真偽値だけ立てる）
+SAFETY_USER_WORDS = ["死にたい", "消えたい", "死のう", "自殺", "自分を傷つけ", "叩いてしまい", "手が出", "殺し",
+                     "しにたい", "きえたい", "しのう", "死んだほうが", "いなくなりたい",
+                     "傷つけ", "虐待", "限界", "首を絞め", "殴"]
+SAFETY_REPLY_MARKERS = ["まもろうよ", "189", "親子のための相談", "地域包括支援センター", "ケアマネ", "110", "119", "相談窓口", "いのちの電話"]
+
+SUPPORT_NOTE = (
+    "\n\n――\n"
+    "焚き火はこのまま無料で使えます。\n"
+    "もし余裕があって応援したいと思ったときだけ、こちらからどうぞ。"
+    "（応援先のサービスには、お名前などが届く場合があります）\n"
+)
+
+
+def support_url() -> str:
+    """環境変数 SUPPORT_URL が https:// で始まるときだけ返す。それ以外は空文字（機能オフ）。"""
+    url = os.environ.get("SUPPORT_URL", "").strip()
+    return url if url.startswith("https://") else ""
+
 WELCOME = (
     "ここは育児・介護の愚痴を燃やす焚き火です🔥\n"
     "子どものこと、親のこと、家族のこと。誰にも言えないイライラや疲れを、ここでなら何でも吐き出してOK。\n"
@@ -135,11 +154,18 @@ def on_message(event: MessageEvent):
     text = event.message.text.strip()
 
     if text == BURN_WORD:
-        sessions.pop(user_id, None)
-        reply(event.reply_token, BURN_REPLY, with_button=False)
+        s = sessions.pop(user_id, None)
+        url = support_url()
+        text_out = BURN_REPLY
+        if (url and s and not s.get("safety")
+                and any(m["role"] == "user" for m in s["messages"])):
+            text_out = BURN_REPLY + SUPPORT_NOTE + url
+        reply(event.reply_token, text_out, with_button=False)
         return
 
     history = get_history(user_id)
+    if any(w in text for w in SAFETY_USER_WORDS):
+        sessions[user_id]["safety"] = True
     history.append({"role": "user", "content": text})
     del history[:-MAX_TURNS]
     # Claude API は user から始まる必要がある
@@ -160,6 +186,8 @@ def on_message(event: MessageEvent):
         reply(event.reply_token, answer)
         return
 
+    if any(m in answer for m in SAFETY_REPLY_MARKERS):
+        sessions[user_id]["safety"] = True
     history.append({"role": "assistant", "content": answer})
     sessions[user_id]["updated"] = time.time()
     reply(event.reply_token, answer)

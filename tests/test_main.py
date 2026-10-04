@@ -120,6 +120,10 @@ class TakibiTest(unittest.TestCase):
         CLAUDE_CALLS.clear()
         CLAUDE_MODE.update(fail=False, answer="それはしんどいね。")
         main.sessions.clear()
+        os.environ.pop("SUPPORT_URL", None)
+
+    def tearDown(self):
+        os.environ.pop("SUPPORT_URL", None)
 
     # --- エンドポイント ---
     def test_health_check(self):
@@ -192,6 +196,78 @@ class TakibiTest(unittest.TestCase):
     def test_system_prompt_is_sent_to_claude(self):
         main.on_message(_event("聞いて"))
         self.assertEqual(CLAUDE_CALLS[-1]["system"], main.SYSTEM_PROMPT)
+
+    # --- 応援リンク（燃やしたあと、条件を満たすときだけ） ---
+    URL = "https://example.com/x"
+
+    def test_burn_without_support_url_is_unchanged(self):
+        main.on_message(_event("愚痴"))
+        main.on_message(_event(main.BURN_WORD))
+        self.assertEqual(_last_text(), main.BURN_REPLY)
+
+    def test_burn_shows_support_link_when_set(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        main.on_message(_event("愚痴"))
+        main.on_message(_event(main.BURN_WORD))
+        t = _last_text()
+        self.assertTrue(t.startswith(main.BURN_REPLY))
+        self.assertIn(self.URL, t)
+        self.assertIn("無料", t)
+        self.assertIsNone(SENT[-1].messages[0].quick_reply)
+        self.assertEqual(len(SENT[-1].messages), 1)
+        self.assertNotIn("U1", main.sessions)
+
+    def test_support_link_not_in_normal_reply(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        main.on_message(_event("愚痴"))
+        self.assertNotIn(self.URL, _last_text())
+
+    def test_no_support_link_after_safety_reply(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        CLAUDE_MODE["answer"] = "189に相談できるよ"
+        main.on_message(_event("しんどい"))
+        main.on_message(_event(main.BURN_WORD))
+        self.assertNotIn(self.URL, _last_text())
+
+    def test_no_support_link_after_safety_words_even_if_api_fails(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event("死にたい"))
+        self.assertIs(main.sessions["U1"].get("safety"), True)
+        main.on_message(_event(main.BURN_WORD))
+        self.assertNotIn(self.URL, _last_text())
+
+    def test_no_support_link_after_hiragana_or_related_words(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        CLAUDE_MODE["fail"] = True
+        for word in ["しにたい", "もう限界"]:
+            main.on_message(_event(word))
+            self.assertIs(main.sessions["U1"].get("safety"), True, word)
+            main.on_message(_event(main.BURN_WORD))
+            self.assertNotIn(self.URL, _last_text(), word)
+
+    def test_no_support_link_without_conversation(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        main.on_message(_event(main.BURN_WORD))
+        self.assertEqual(_last_text(), main.BURN_REPLY)
+
+    def test_support_url_must_be_https(self):
+        for bad in ["http://example.com/x", "javascript:alert(1)", "   "]:
+            os.environ["SUPPORT_URL"] = bad
+            main.on_message(_event("愚痴"))
+            main.on_message(_event(main.BURN_WORD))
+            self.assertEqual(_last_text(), main.BURN_REPLY, bad)
+
+    def test_safety_flag_stores_no_content(self):
+        main.on_message(_event("死にたい"))
+        s = main.sessions["U1"]
+        self.assertLessEqual(set(s.keys()), {"messages", "updated", "safety"})
+        self.assertIs(s["safety"], True)
+
+    def test_support_note_has_no_guilt_words(self):
+        for bad in ["必要です", "続けるには", "使い続ける"]:
+            self.assertNotIn(bad, main.SUPPORT_NOTE)
+        self.assertIn("無料", main.SUPPORT_NOTE)
 
 
 if __name__ == "__main__":
