@@ -269,6 +269,58 @@ class TakibiTest(unittest.TestCase):
             self.assertNotIn(bad, main.SUPPORT_NOTE)
         self.assertIn("無料", main.SUPPORT_NOTE)
 
+    # --- 使い方（固定文。Claudeを呼ばず、会話を作らない） ---
+    def test_help_returns_fixed_text_without_claude(self):
+        main.on_message(_event("使い方"))
+        self.assertEqual(_last_text(), main.HELP_TEXT)
+        self.assertEqual(CLAUDE_CALLS, [])
+        self.assertNotIn("U1", main.sessions)
+        self.assertIsNone(SENT[-1].messages[0].quick_reply)
+
+    def test_help_keeps_existing_conversation(self):
+        main.on_message(_event("愚痴"))
+        updated = main.sessions["U1"]["updated"]
+        main.on_message(_event("使い方"))
+        self.assertEqual(_last_text(), main.HELP_TEXT)
+        self.assertEqual(len(main.sessions["U1"]["messages"]), 2)
+        self.assertEqual(main.sessions["U1"]["updated"], updated)
+        self.assertEqual(len(CLAUDE_CALLS), 1)
+        self.assertIsNotNone(SENT[-1].messages[0].quick_reply)
+
+    def test_help_word_variants(self):
+        for word in ["使い方", " 使い方 "]:
+            main.on_message(_event(word))
+            self.assertEqual(_last_text(), main.HELP_TEXT, word)
+        self.assertEqual(CLAUDE_CALLS, [])
+
+    def test_help_katakana_goes_to_claude(self):
+        # 「ヘルプ」はSOSとして送られうるので、説明文ではなくClaudeに回す
+        main.on_message(_event("ヘルプ"))
+        self.assertEqual(len(CLAUDE_CALLS), 1)
+        self.assertNotEqual(_last_text(), main.HELP_TEXT)
+
+    def test_help_word_inside_sentence_goes_to_claude(self):
+        main.on_message(_event("使い方がわからない親にイライラ"))
+        self.assertEqual(len(CLAUDE_CALLS), 1)
+        self.assertEqual(_last_text(), "それはしんどいね。")
+
+    def test_help_text_is_accurate(self):
+        for must in ["トーク", "30日", "学習", "燃やす", "削除"]:
+            self.assertIn(must, main.HELP_TEXT)
+        for bad in ["完全に", "どこにも残", "1時間で消", "自動で消"]:
+            self.assertNotIn(bad, main.HELP_TEXT)
+
+    def test_help_mentions_support_only_when_set(self):
+        main.on_message(_event("使い方"))
+        self.assertNotIn("応援", _last_text())
+        os.environ["SUPPORT_URL"] = self.URL
+        main.on_message(_event("使い方"))
+        self.assertIn(main.HELP_SUPPORT_NOTE, _last_text())
+        self.assertNotIn(self.URL, _last_text())
+
+    def test_welcome_mentions_help(self):
+        self.assertIn("使い方", main.WELCOME)
+
 
 if __name__ == "__main__":
     unittest.main()
