@@ -22,7 +22,7 @@ from linebot.v3.messaging import (
     ReplyMessageRequest,
     TextMessage,
 )
-from linebot.v3.webhooks import FollowEvent, MessageEvent, TextMessageContent
+from linebot.v3.webhooks import FollowEvent, MessageEvent, TextMessageContent, UnsendEvent
 
 LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
@@ -177,6 +177,14 @@ def on_follow(event: FollowEvent):
     reply(event.reply_token, WELCOME, with_button=False)
 
 
+@handler.add(UnsendEvent)
+def on_unsend(event: UnsendEvent):
+    # 送信取消：その人の会話をまるごと消す（燃やすと同じ）。返信用トークンがないので返事はしない
+    user_id = getattr(event.source, "user_id", None)
+    if user_id:
+        sessions.pop(user_id, None)
+
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def on_message(event: MessageEvent):
     user_id = event.source.user_id
@@ -220,10 +228,13 @@ def on_message(event: MessageEvent):
         reply(event.reply_token, answer)
         return
 
-    if any(m in answer for m in SAFETY_REPLY_MARKERS):
-        sessions[user_id]["safety"] = True
-    history.append({"role": "assistant", "content": answer})
-    sessions[user_id]["updated"] = time.time()
+    s = sessions.get(user_id)
+    if s is not None and s["messages"] is history:
+        # 返事を待つ間に「燃やす」や送信取消で消されていたら、記録し直さない
+        if any(m in answer for m in SAFETY_REPLY_MARKERS):
+            s["safety"] = True
+        history.append({"role": "assistant", "content": answer})
+        s["updated"] = time.time()
     reply(event.reply_token, answer)
 
 

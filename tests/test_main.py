@@ -9,6 +9,7 @@ LINE SDK と Anthropic SDK はダミーに差し替えるので、
 """
 import os
 import sys
+import time
 import types
 import unittest
 
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ---------- ダミーの外部ライブラリ ----------
 SENT = []          # LINEに返信した内容
 CLAUDE_CALLS = []  # Claudeに送った内容
-CLAUDE_MODE = {"fail": False, "answer": "それはしんどいね。"}
+CLAUDE_MODE = {"fail": False, "answer": "それはしんどいね。", "during": None}
 
 
 def _install_fakes():
@@ -67,7 +68,7 @@ def _install_fakes():
         setattr(messaging, name, type(name, (_Obj,), {}))
     messaging.ApiClient = ApiClient
     messaging.MessagingApi = MessagingApi
-    for name in ["FollowEvent", "MessageEvent", "TextMessageContent"]:
+    for name in ["FollowEvent", "MessageEvent", "TextMessageContent", "UnsendEvent"]:
         setattr(webhooks, name, type(name, (_Obj,), {}))
 
     exceptions.InvalidSignatureError = InvalidSignatureError
@@ -78,6 +79,8 @@ def _install_fakes():
     class _Messages:
         def create(self, **kwargs):
             CLAUDE_CALLS.append(kwargs)
+            if CLAUDE_MODE["during"]:
+                CLAUDE_MODE["during"]()
             if CLAUDE_MODE["fail"]:
                 raise RuntimeError("api down")
             block = types.SimpleNamespace(type="text", text=CLAUDE_MODE["answer"])
@@ -110,6 +113,12 @@ def _event(text, user="U1"):
     )
 
 
+def _unsend(user="U1"):
+    # reply_token を持たせない（返事しようとすると AttributeError で分かる）
+    return types.SimpleNamespace(source=types.SimpleNamespace(user_id=user),
+                                 unsend=types.SimpleNamespace(message_id="m1"))
+
+
 def _last_text():
     return SENT[-1].messages[0].text
 
@@ -118,7 +127,7 @@ class TakibiTest(unittest.TestCase):
     def setUp(self):
         SENT.clear()
         CLAUDE_CALLS.clear()
-        CLAUDE_MODE.update(fail=False, answer="それはしんどいね。")
+        CLAUDE_MODE.update(fail=False, answer="それはしんどいね。", during=None)
         main.sessions.clear()
         os.environ.pop("SUPPORT_URL", None)
 
@@ -320,6 +329,62 @@ class TakibiTest(unittest.TestCase):
 
     def test_welcome_mentions_help(self):
         self.assertIn("使い方", main.WELCOME)
+
+    # --- 送信取消（燃やすと同じく会話を消す。返事はしない） ---
+    def test_unsend_handler_is_registered(self):
+        self.assertIs(main.handler.handlers.get("UnsendEvent"), main.on_unsend)
+
+    def test_unsend_erases_conversation_without_reply(self):
+        main.on_message(_event("愚痴"))
+        sent, calls = len(SENT), len(CLAUDE_CALLS)
+        main.on_unsend(_unsend())
+        self.assertNotIn("U1", main.sessions)
+        self.assertEqual((len(SENT), len(CLAUDE_CALLS)), (sent, calls))
+
+    def test_unsend_only_erases_that_user(self):
+        main.on_message(_event("1つ目", "A"))
+        main.on_message(_event("2つ目", "B"))
+        main.on_unsend(_unsend("A"))
+        self.assertNotIn("A", main.sessions)
+        self.assertEqual(len(main.sessions["B"]["messages"]), 2)
+
+    def test_unsend_without_conversation_is_noop(self):
+        main.on_unsend(_unsend())
+        main.on_message(_event("愚痴"))
+        main.on_message(_event(main.BURN_WORD))
+        sent = len(SENT)
+        main.on_unsend(_unsend())
+        self.assertEqual(len(SENT), sent)
+        self.assertNotIn("U1", main.sessions)
+
+    def test_unsend_without_user_id_is_noop(self):
+        main.on_message(_event("愚痴"))
+        sent = len(SENT)
+        main.on_unsend(_unsend(None))
+        self.assertEqual(len(main.sessions["U1"]["messages"]), 2)
+        self.assertEqual(len(SENT), sent)
+
+    # --- 返事待ちの間に会話が消えても落ちない・復活しない ---
+    def test_erased_while_waiting_does_not_crash_or_restore(self):
+        CLAUDE_MODE["during"] = lambda: main.sessions.pop("U1", None)
+        main.on_message(_event("愚痴"))
+        self.assertEqual(len(SENT), 1)
+        self.assertEqual(_last_text(), "それはしんどいね。")
+        self.assertNotIn("U1", main.sessions)
+
+    def test_safety_answer_still_sent_after_erase(self):
+        CLAUDE_MODE["answer"] = "189に相談できるよ"
+        CLAUDE_MODE["during"] = lambda: main.sessions.pop("U1", None)
+        main.on_message(_event("しんどい"))
+        self.assertIn("189", _last_text())
+        self.assertNotIn("U1", main.sessions)
+
+    def test_new_conversation_during_wait_is_not_mixed(self):
+        def restart():
+            main.sessions["U1"] = {"messages": [], "updated": time.time()}
+        CLAUDE_MODE["during"] = restart
+        main.on_message(_event("愚痴"))
+        self.assertEqual(main.sessions["U1"]["messages"], [])
 
 
 if __name__ == "__main__":
