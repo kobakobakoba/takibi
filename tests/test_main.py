@@ -9,6 +9,7 @@ LINE SDK と Anthropic SDK はダミーに差し替えるので、
 """
 import os
 import sys
+import threading
 import time
 import types
 import unittest
@@ -385,6 +386,79 @@ class TakibiTest(unittest.TestCase):
         CLAUDE_MODE["during"] = restart
         main.on_message(_event("愚痴"))
         self.assertEqual(main.sessions["U1"]["messages"], [])
+
+    # --- 放置会話の一括削除とロック ---
+    def test_idle_sessions_of_others_are_swept(self):
+        main.on_message(_event("愚痴", "A"))
+        main.sessions["A"]["updated"] -= main.IDLE_SECONDS + 1
+        main.on_message(_event("聞いて", "B"))
+        self.assertNotIn("A", main.sessions)
+        self.assertEqual(len(main.sessions["B"]["messages"]), 2)
+
+    def test_recent_sessions_are_not_swept(self):
+        main.on_message(_event("愚痴", "A"))
+        main.sessions["A"]["updated"] -= main.IDLE_SECONDS - 60
+        main.on_message(_event("聞いて", "B"))
+        self.assertEqual(len(main.sessions["A"]["messages"]), 2)
+
+    def test_lock_not_held_while_waiting_for_claude(self):
+        got = []
+
+        def try_lock():
+            if main.sessions_lock.acquire(blocking=False):
+                main.sessions_lock.release()
+                got.append(True)
+        CLAUDE_MODE["during"] = try_lock
+        main.on_message(_event("愚痴"))
+        self.assertEqual(got, [True])
+        self.assertEqual(len(SENT), 1)
+
+    def test_lock_released_after_every_path(self):
+        main.on_message(_event("愚痴"))
+        self.assertFalse(main.sessions_lock.locked())
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event("聞いて"))
+        self.assertFalse(main.sessions_lock.locked())
+        for ev in [_event("使い方"), _event(main.BURN_WORD)]:
+            main.on_message(ev)
+            self.assertFalse(main.sessions_lock.locked())
+        main.on_unsend(_unsend())
+        self.assertFalse(main.sessions_lock.locked())
+
+    def test_api_failure_removes_only_own_message(self):
+        CLAUDE_MODE["fail"] = True
+        CLAUDE_MODE["during"] = lambda: main.sessions["U1"]["messages"].append(
+            {"role": "user", "content": "別の発言"})
+        main.on_message(_event("聞いて"))
+        self.assertEqual(main.sessions["U1"]["messages"], [{"role": "user", "content": "別の発言"}])
+
+    def test_parallel_messages_do_not_crash(self):
+        old = time.time() - main.IDLE_SECONDS - 1
+        for i in range(30):
+            main.sessions[f"old{i}"] = {"messages": [], "updated": old}
+        errors = []
+
+        def work(n):
+            try:
+                for i in range(30):
+                    user = f"U{(n + i) % 3}"
+                    if i % 7 == 6:
+                        main.on_message(_event(main.BURN_WORD, user))
+                    elif i % 11 == 10:
+                        main.on_unsend(_unsend(user))
+                    else:
+                        main.on_message(_event(f"愚痴{i}", user))
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+        threads = [threading.Thread(target=work, args=(n,)) for n in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+            self.assertFalse(t.is_alive(), "デッドロックの疑い")
+        self.assertEqual(errors, [])
+        self.assertFalse(main.sessions_lock.locked())
+        self.assertFalse(any(k.startswith("old") for k in main.sessions))
 
 
 if __name__ == "__main__":

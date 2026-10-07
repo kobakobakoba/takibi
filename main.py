@@ -6,6 +6,7 @@
 - 返信はすべて Reply API なので、LINEの無料プランでも通数制限にかからない
 """
 import os
+import threading
 import time
 
 import anthropic
@@ -127,6 +128,16 @@ claude = anthropic.Anthropic()  # ANTHROPIC_API_KEY を環境変数から読む
 
 # user_id -> {"messages": [...], "updated": float}
 sessions: dict[str, dict] = {}
+# sessions を読み書きする短い区間だけで持つ。Claude API の呼び出しと LINE への返信の間は持たない。
+# Lock は同じスレッドで2回取ると詰まるので、ロックを取るのは on_message / on_unsend の中だけにする
+sessions_lock = threading.Lock()
+
+
+def sweep_idle(now: float) -> None:
+    """1時間以上たった会話を全員分まとめて消す。sessions_lock を持った状態で呼ぶ（自分では取らない）"""
+    for uid, s in list(sessions.items()):
+        if now - s["updated"] > IDLE_SECONDS:
+            sessions.pop(uid, None)
 
 burn_button = QuickReply(
     items=[QuickReplyItem(action=MessageAction(label="🔥 燃やす", text=BURN_WORD))]
@@ -134,6 +145,7 @@ burn_button = QuickReply(
 
 
 def get_history(user_id: str) -> list[dict]:
+    """sessions_lock を持った状態で呼ぶ（自分では取らない）"""
     s = sessions.get(user_id)
     if s is None or time.time() - s["updated"] > IDLE_SECONDS:
         s = {"messages": [], "updated": time.time()}
@@ -182,7 +194,8 @@ def on_unsend(event: UnsendEvent):
     # 送信取消：その人の会話をまるごと消す（燃やすと同じ）。返信用トークンがないので返事はしない
     user_id = getattr(event.source, "user_id", None)
     if user_id:
-        sessions.pop(user_id, None)
+        with sessions_lock:
+            sessions.pop(user_id, None)
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
@@ -191,7 +204,8 @@ def on_message(event: MessageEvent):
     text = event.message.text.strip()
 
     if text == BURN_WORD:
-        s = sessions.pop(user_id, None)
+        with sessions_lock:
+            s = sessions.pop(user_id, None)
         url = support_url()
         text_out = BURN_REPLY
         if (url and s and not s.get("safety")
@@ -205,36 +219,45 @@ def on_message(event: MessageEvent):
         reply(event.reply_token, out, with_button=user_id in sessions)
         return
 
-    history = get_history(user_id)
-    if any(w in text for w in SAFETY_USER_WORDS):
-        sessions[user_id]["safety"] = True
-    history.append({"role": "user", "content": text})
-    del history[:-MAX_TURNS]
-    # Claude API は user から始まる必要がある
-    while history and history[0]["role"] != "user":
-        history.pop(0)
+    msg = {"role": "user", "content": text}
+    with sessions_lock:
+        now = time.time()
+        sweep_idle(now)
+        history = get_history(user_id)
+        s = sessions[user_id]
+        if any(w in text for w in SAFETY_USER_WORDS):
+            s["safety"] = True
+        s["updated"] = now  # 返事待ちの間に、ほかの人の一括削除で消されないように
+        history.append(msg)
+        del history[:-MAX_TURNS]
+        # Claude API は user から始まる必要がある
+        while history and history[0]["role"] != "user":
+            history.pop(0)
+        to_send = list(history)  # ロックの外でほかのスレッドが履歴を変えても、送る内容が乱れないよう写しを送る
 
     try:
         res = claude.messages.create(
             model=MODEL,
             max_tokens=400,
             system=SYSTEM_PROMPT,
-            messages=history,
+            messages=to_send,
         )
         answer = "".join(b.text for b in res.content if b.type == "text").strip()
     except Exception:
-        history.pop()
+        with sessions_lock:
+            history[:] = [m for m in history if m is not msg]
         answer = "ごめん、いま火の調子が悪いみたい。少ししてからもう一度送ってみて。"
         reply(event.reply_token, answer)
         return
 
-    s = sessions.get(user_id)
-    if s is not None and s["messages"] is history:
-        # 返事を待つ間に「燃やす」や送信取消で消されていたら、記録し直さない
-        if any(m in answer for m in SAFETY_REPLY_MARKERS):
-            s["safety"] = True
-        history.append({"role": "assistant", "content": answer})
-        s["updated"] = time.time()
+    with sessions_lock:
+        s = sessions.get(user_id)
+        if s is not None and s["messages"] is history:
+            # 返事を待つ間に「燃やす」や送信取消で消されていたら、記録し直さない
+            if any(m in answer for m in SAFETY_REPLY_MARKERS):
+                s["safety"] = True
+            history.append({"role": "assistant", "content": answer})
+            s["updated"] = time.time()
     reply(event.reply_token, answer)
 
 
