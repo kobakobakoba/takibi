@@ -7,6 +7,8 @@ LINE SDK と Anthropic SDK はダミーに差し替えるので、
 ネットにつながらない環境やライブラリ未インストールの環境でも動く。
 会社の自動運営では、このテストが全部通らない変更は本番に出さない。
 """
+import contextlib
+import io
 import os
 import sys
 import threading
@@ -19,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ---------- ダミーの外部ライブラリ ----------
 SENT = []          # LINEに返信した内容
 CLAUDE_CALLS = []  # Claudeに送った内容
-CLAUDE_MODE = {"fail": False, "answer": "それはしんどいね。", "during": None}
+CLAUDE_MODE = {"fail": False, "answer": "それはしんどいね。", "during": None, "reply_fail": False}
 
 
 def _install_fakes():
@@ -62,6 +64,9 @@ def _install_fakes():
             pass
 
         def reply_message(self, req):
+            if CLAUDE_MODE["reply_fail"]:
+                # 送ろうとした文をわざと例外に入れ、それが出力されないことを確かめる
+                raise RuntimeError("line error: " + req.messages[0].text)
             SENT.append(req)
 
     for name in ["Configuration", "MessageAction", "QuickReply", "QuickReplyItem",
@@ -128,7 +133,7 @@ class TakibiTest(unittest.TestCase):
     def setUp(self):
         SENT.clear()
         CLAUDE_CALLS.clear()
-        CLAUDE_MODE.update(fail=False, answer="それはしんどいね。", during=None)
+        CLAUDE_MODE.update(fail=False, answer="それはしんどいね。", during=None, reply_fail=False)
         main.sessions.clear()
         os.environ.pop("SUPPORT_URL", None)
 
@@ -459,6 +464,46 @@ class TakibiTest(unittest.TestCase):
         self.assertIs(main.sessions["U1"]["safety"], True)
         main.on_message(_event(main.BURN_WORD))
         self.assertNotIn(self.URL, _last_text())
+
+    # --- LINE への返信が失敗しても落ちない・届かなかった1往復を残さない ---
+    def test_reply_failure_does_not_raise_and_drops_unseen_turn(self):
+        main.on_message(_event("1つ目"))
+        CLAUDE_MODE["reply_fail"] = True
+        main.on_message(_event("2つ目"))
+        self.assertEqual(main.sessions["U1"]["messages"], [
+            {"role": "user", "content": "1つ目"},
+            {"role": "assistant", "content": "それはしんどいね。"}])
+        self.assertFalse(main.sessions_lock.locked())
+
+    def test_reply_failure_on_fixed_replies_does_not_raise(self):
+        CLAUDE_MODE["reply_fail"] = True
+        main.on_follow(_event(""))
+        main.on_message(_event("使い方"))
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event("聞いて"))
+        main.on_message(_event(main.BURN_WORD))
+        self.assertNotIn("U1", main.sessions)
+        self.assertEqual(SENT, [])
+        self.assertFalse(main.sessions_lock.locked())
+
+    def test_reply_failure_keeps_safety_flag(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        CLAUDE_MODE.update(answer="189に相談できるよ", reply_fail=True)
+        main.on_message(_event("死にたい"))
+        self.assertIs(main.sessions["U1"]["safety"], True)
+        CLAUDE_MODE["reply_fail"] = False
+        main.on_message(_event(main.BURN_WORD))
+        self.assertNotIn(self.URL, _last_text())
+
+    def test_reply_failure_outputs_no_content(self):
+        CLAUDE_MODE["reply_fail"] = True
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            main.on_message(_event("夫が手伝わない"))
+        logged = out.getvalue() + err.getvalue()
+        for secret in ["夫が手伝わない", "それはしんどいね", "tok", "U1"]:
+            self.assertNotIn(secret, logged)
+        self.assertIn("reply failed", logged)
 
     def test_parallel_messages_do_not_crash(self):
         old = time.time() - main.IDLE_SECONDS - 1

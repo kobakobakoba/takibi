@@ -153,19 +153,26 @@ def get_history(user_id: str) -> list[dict]:
     return s["messages"]
 
 
-def reply(reply_token: str, text: str, with_button: bool = True) -> None:
-    with ApiClient(line_config) as api_client:
-        MessagingApi(api_client).reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[
-                    TextMessage(
-                        text=text,
-                        quick_reply=burn_button if with_button else None,
-                    )
-                ],
+def reply(reply_token: str, text: str, with_button: bool = True) -> bool:
+    """LINE に返信する。失敗しても例外を外に出さず False を返す"""
+    try:
+        with ApiClient(line_config) as api_client:
+            MessagingApi(api_client).reply_message(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[
+                        TextMessage(
+                            text=text,
+                            quick_reply=burn_button if with_button else None,
+                        )
+                    ],
+                )
             )
-        )
+        return True
+    except Exception as e:
+        # 例外の中身（LINE の応答本文など）や送ろうとした文は出さない。例外の種類の名前だけ
+        print("reply failed:", type(e).__name__, flush=True)
+        return False
 
 
 @app.post("/callback")
@@ -253,15 +260,19 @@ def on_message(event: MessageEvent):
         reply(event.reply_token, answer)
         return
 
+    ans_msg = {"role": "assistant", "content": answer}
     with sessions_lock:
         s = sessions.get(user_id)
         if s is not None and s["messages"] is history:
             # 返事を待つ間に「燃やす」や送信取消で消されていたら、記録し直さない
             if any(m in answer for m in SAFETY_REPLY_MARKERS):
                 s["safety"] = True
-            history.append({"role": "assistant", "content": answer})
+            history.append(ans_msg)
             s["updated"] = time.time()
-    reply(event.reply_token, answer)
+    if not reply(event.reply_token, answer):
+        # 届かなかった返事と、その元の発言を履歴から外す（安全フラグは残す）
+        with sessions_lock:
+            history[:] = [m for m in history if m is not msg and m is not ans_msg]
 
 
 if __name__ == "__main__":
