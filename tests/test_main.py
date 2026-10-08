@@ -432,6 +432,34 @@ class TakibiTest(unittest.TestCase):
         main.on_message(_event("聞いて"))
         self.assertEqual(main.sessions["U1"]["messages"], [{"role": "user", "content": "別の発言"}])
 
+    # --- AI の返事が空なら、API 失敗と同じくおわびを返す ---
+    def test_empty_answer_sends_apology_and_keeps_history_clean(self):
+        CLAUDE_MODE["answer"] = ""
+        main.on_message(_event("聞いて"))
+        self.assertEqual(len(SENT), 1)
+        self.assertIn("もう一度", _last_text())
+        self.assertIsNotNone(SENT[-1].messages[0].quick_reply)
+        self.assertEqual(main.sessions["U1"]["messages"], [])
+        self.assertFalse(main.sessions_lock.locked())
+
+    def test_whitespace_answer_is_treated_as_empty(self):
+        CLAUDE_MODE["answer"] = " \n　"
+        main.on_message(_event("聞いて"))
+        self.assertIn("もう一度", _last_text())
+        self.assertEqual(main.sessions["U1"]["messages"], [])
+        CLAUDE_MODE["answer"] = "それはしんどいね。"
+        main.on_message(_event("もう一回"))
+        self.assertEqual(_last_text(), "それはしんどいね。")
+        self.assertTrue(all(m["content"] for m in main.sessions["U1"]["messages"]))
+
+    def test_empty_answer_keeps_safety_flag(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        CLAUDE_MODE["answer"] = ""
+        main.on_message(_event("死にたい"))
+        self.assertIs(main.sessions["U1"]["safety"], True)
+        main.on_message(_event(main.BURN_WORD))
+        self.assertNotIn(self.URL, _last_text())
+
     def test_parallel_messages_do_not_crash(self):
         old = time.time() - main.IDLE_SECONDS - 1
         for i in range(30):

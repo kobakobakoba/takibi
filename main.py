@@ -243,6 +243,9 @@ def on_message(event: MessageEvent):
             messages=to_send,
         )
         answer = "".join(b.text for b in res.content if b.type == "text").strip()
+        if not answer:
+            # 空の返事は LINE に送れず、履歴に入れると次の呼び出しも失敗するので、API の失敗と同じ扱いにする
+            raise ValueError("empty answer")
     except Exception:
         with sessions_lock:
             history[:] = [m for m in history if m is not msg]
