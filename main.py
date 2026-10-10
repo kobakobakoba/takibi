@@ -131,6 +131,8 @@ sessions: dict[str, dict] = {}
 # sessions を読み書きする短い区間だけで持つ。Claude API の呼び出しと LINE への返信の間は持たない。
 # Lock は同じスレッドで2回取ると詰まるので、ロックを取るのは on_message / on_unsend の中だけにする
 sessions_lock = threading.Lock()
+# user_id -> 返事待ち（Claude 呼び出し〜返信）の件数。会話の中身は入れない。0 になったらキーごと消す。ログにも出さない
+inflight: dict[str, int] = {}
 
 
 def sweep_idle(now: float) -> None:
@@ -213,9 +215,10 @@ def on_message(event: MessageEvent):
     if text == BURN_WORD:
         with sessions_lock:
             s = sessions.pop(user_id, None)
+            waiting = user_id in inflight  # 相談先の案内が後から届くかもしれない間は応援リンクを出さない
         url = support_url()
         text_out = BURN_REPLY
-        if (url and s and not s.get("safety")
+        if (url and s and not s.get("safety") and not waiting
                 and any(m["role"] == "user" for m in s["messages"])):
             text_out = BURN_REPLY + SUPPORT_NOTE + url
         reply(event.reply_token, text_out, with_button=False)
@@ -241,7 +244,20 @@ def on_message(event: MessageEvent):
         while history and history[0]["role"] != "user":
             history.pop(0)
         to_send = list(history)  # ロックの外でほかのスレッドが履歴を変えても、送る内容が乱れないよう写しを送る
+        inflight[user_id] = inflight.get(user_id, 0) + 1
+    try:
+        answer_and_reply(event, user_id, msg, history, to_send)
+    finally:
+        with sessions_lock:
+            n = inflight.get(user_id, 0) - 1
+            if n > 0:
+                inflight[user_id] = n
+            else:
+                inflight.pop(user_id, None)
 
+
+def answer_and_reply(event, user_id: str, msg: dict, history: list[dict], to_send: list[dict]) -> None:
+    """Claude を呼んで返信する（おわびの経路を含む）。ロックを持たずに呼ぶ（中で短く取る）"""
     try:
         res = claude.messages.create(
             model=MODEL,
@@ -263,10 +279,11 @@ def on_message(event: MessageEvent):
     ans_msg = {"role": "assistant", "content": answer}
     with sessions_lock:
         s = sessions.get(user_id)
+        if s is not None and any(m in answer for m in SAFETY_REPLY_MARKERS):
+            # 返事待ちの間に燃やして新しい会話を始めていても、その会話には応援リンクを出さない
+            s["safety"] = True
         if s is not None and s["messages"] is history:
             # 返事を待つ間に「燃やす」や送信取消で消されていたら、記録し直さない
-            if any(m in answer for m in SAFETY_REPLY_MARKERS):
-                s["safety"] = True
             history.append(ans_msg)
             s["updated"] = time.time()
     if not reply(event.reply_token, answer):

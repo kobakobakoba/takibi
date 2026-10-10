@@ -135,6 +135,7 @@ class TakibiTest(unittest.TestCase):
         CLAUDE_CALLS.clear()
         CLAUDE_MODE.update(fail=False, answer="それはしんどいね。", during=None, reply_fail=False)
         main.sessions.clear()
+        main.inflight.clear()
         os.environ.pop("SUPPORT_URL", None)
 
     def tearDown(self):
@@ -462,6 +463,46 @@ class TakibiTest(unittest.TestCase):
         CLAUDE_MODE["answer"] = ""
         main.on_message(_event("死にたい"))
         self.assertIs(main.sessions["U1"]["safety"], True)
+        CLAUDE_MODE["answer"] = "それはしんどいね。"
+        main.on_message(_event("聞いて"))  # 会話にユーザー発言が残る状態にする（フラグがないと URL が出る）
+        main.on_message(_event(main.BURN_WORD))
+        self.assertNotIn(self.URL, _last_text())
+
+    # --- 返事待ちの間に燃やしても応援リンクを出さない（会話の中身は覚えず、件数だけ見る） ---
+    def test_no_support_link_when_burned_while_older_call_waits(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        burned = []
+
+        def second_and_burn():
+            CLAUDE_MODE["during"] = None
+            main.on_message(_event("2つ目"))
+            main.on_message(_event(main.BURN_WORD))
+            burned.append(_last_text())
+        CLAUDE_MODE["during"] = second_and_burn
+        main.on_message(_event("1つ目"))
+        self.assertTrue(burned[0].startswith(main.BURN_REPLY))
+        self.assertNotIn(self.URL, burned[0])
+        self.assertNotIn("U1", main.inflight)
+
+    def test_inflight_key_removed_after_every_path(self):
+        for mode in [{}, {"fail": True}, {"answer": ""}, {"reply_fail": True}]:
+            CLAUDE_MODE.update({"fail": False, "answer": "それはしんどいね。", "reply_fail": False, **mode})
+            main.on_message(_event("聞いて"))
+            self.assertEqual(main.inflight, {}, mode)
+            self.assertFalse(main.sessions_lock.locked(), mode)
+
+    def test_safety_reply_flags_new_conversation_started_during_wait(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        CLAUDE_MODE["answer"] = "189に相談できるよ"
+        new_msg = {"role": "user", "content": "新しい話"}
+
+        def restart():
+            main.sessions["U1"] = {"messages": [new_msg], "updated": time.time()}
+        CLAUDE_MODE["during"] = restart
+        main.on_message(_event("しんどい"))
+        self.assertIs(main.sessions["U1"]["safety"], True)
+        self.assertEqual(main.sessions["U1"]["messages"], [new_msg])
+        CLAUDE_MODE["during"] = None
         main.on_message(_event(main.BURN_WORD))
         self.assertNotIn(self.URL, _last_text())
 
@@ -532,6 +573,7 @@ class TakibiTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertFalse(main.sessions_lock.locked())
         self.assertFalse(any(k.startswith("old") for k in main.sessions))
+        self.assertEqual(main.inflight, {})
 
 
 if __name__ == "__main__":
