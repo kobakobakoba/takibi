@@ -337,6 +337,15 @@ class TakibiTest(unittest.TestCase):
     def test_welcome_mentions_help(self):
         self.assertIn("使い方", main.WELCOME)
 
+    def test_welcome_and_burn_reply_do_not_overpromise(self):
+        banned = ["完全に", "どこにも残", "1時間で消", "自動で消",
+                  "もう残っていません", "サーバーからぜんぶ"]
+        for text in (main.WELCOME, main.BURN_REPLY):
+            self.assertIn("焚き火のサーバー", text)
+            self.assertEqual(text.count("サーバー"), text.count("焚き火のサーバー"))
+            for word in banned:
+                self.assertNotIn(word, text)
+
     # --- 送信取消（燃やすと同じく会話を消す。返事はしない） ---
     def test_unsend_handler_is_registered(self):
         self.assertIs(main.handler.handlers.get("UnsendEvent"), main.on_unsend)
