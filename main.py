@@ -117,6 +117,9 @@ HELP_TEXT = (
     "命や安全が今まさに危ないときは、110番・119番へ。"
 )
 
+# おわびに添える一文（HELP_TEXT の最後の行と一字一句同じ。危ない言葉があった会話のときだけ添える。窓口は足さない）
+APOLOGY_SAFETY_LINE = "命や安全が今まさに危ないときは、110番・119番へ。"
+
 HELP_SUPPORT_NOTE = (
     "\n\n燃やしたあとに出る応援リンクから応援した場合、お名前などが応援先のサービスに届くことがあります。"
 )
@@ -272,7 +275,11 @@ def answer_and_reply(event, user_id: str, msg: dict, history: list[dict], to_sen
     except Exception:
         with sessions_lock:
             history[:] = [m for m in history if m is not msg]
+            s = sessions.get(user_id)
+            flagged = s is not None and bool(s.get("safety"))
         answer = "ごめん、いま火の調子が悪いみたい。少ししてからもう一度送ってみて。"
+        if flagged or any(w in msg["content"] for w in SAFETY_USER_WORDS):
+            answer += "\n\n" + APOLOGY_SAFETY_LINE
         reply(event.reply_token, answer)
         return
 

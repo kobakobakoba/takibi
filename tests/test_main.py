@@ -477,6 +477,79 @@ class TakibiTest(unittest.TestCase):
         main.on_message(_event(main.BURN_WORD))
         self.assertNotIn(self.URL, _last_text())
 
+    # --- おわびに 110番・119番の一文を添える（危ない言葉があった会話だけ） ---
+    def test_api_failure_after_safety_words_adds_emergency_line(self):
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event("死にたい"))
+        t = _last_text()
+        self.assertEqual(len(SENT), 1)
+        self.assertIn("もう一度", t)
+        self.assertEqual(t.count(main.APOLOGY_SAFETY_LINE), 1)
+        self.assertTrue(t.endswith("\n\n" + main.APOLOGY_SAFETY_LINE))
+        self.assertNotIn("189", t)
+        self.assertNotIn("まもろうよ", t)
+
+    def test_empty_or_blank_answer_after_safety_words_adds_emergency_line(self):
+        for ans in ["", " \n　"]:
+            SENT.clear()
+            main.sessions.clear()
+            main.inflight.clear()
+            CLAUDE_MODE["answer"] = ans
+            main.on_message(_event("死にたい"))
+            self.assertEqual(len(SENT), 1)
+            self.assertIn("もう一度", _last_text())
+            self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+
+    def test_apology_without_safety_words_has_no_emergency_line(self):
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event("聞いて"))
+        CLAUDE_MODE.update(fail=False, answer="")
+        main.on_message(_event("聞いて", "U2"))
+        self.assertEqual(len(SENT), 2)
+        for req in SENT:
+            self.assertIn("もう一度", req.messages[0].text)
+            self.assertNotIn("110", req.messages[0].text)
+            self.assertNotIn("119", req.messages[0].text)
+
+    def test_emergency_line_matches_help_text(self):
+        self.assertIn(main.APOLOGY_SAFETY_LINE, main.HELP_TEXT)
+
+    def test_apology_with_safety_words_keeps_existing_guarantees(self):
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event("死にたい"))
+        self.assertEqual(main.sessions["U1"]["messages"], [])
+        self.assertIs(main.sessions["U1"]["safety"], True)
+        self.assertIsNotNone(SENT[-1].messages[0].quick_reply)
+        self.assertFalse(main.sessions_lock.locked())
+        self.assertEqual(main.inflight, {})
+
+    def test_apology_after_burn_during_wait_still_adds_emergency_line(self):
+        CLAUDE_MODE["fail"] = True
+        CLAUDE_MODE["during"] = lambda: main.sessions.pop("U1", None)
+        main.on_message(_event("死にたい"))
+        self.assertEqual(len(SENT), 1)
+        self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+        self.assertNotIn("U1", main.sessions)
+        self.assertFalse(main.sessions_lock.locked())
+
+    def test_apology_never_has_support_link(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event("死にたい"))
+        main.on_message(_event("聞いて", "U2"))
+        self.assertEqual(len(SENT), 2)
+        for req in SENT:
+            self.assertNotIn(self.URL, req.messages[0].text)
+            self.assertNotIn("応援", req.messages[0].text)
+
+    def test_apology_in_flagged_conversation_adds_emergency_line(self):
+        CLAUDE_MODE["answer"] = "189に相談できるよ"
+        main.on_message(_event("しんどい"))
+        self.assertIs(main.sessions["U1"]["safety"], True)
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event("聞いて"))
+        self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+
     # --- 返事待ちの間に燃やしても応援リンクを出さない（会話の中身は覚えず、件数だけ見る） ---
     def test_no_support_link_when_burned_while_older_call_waits(self):
         os.environ["SUPPORT_URL"] = self.URL
