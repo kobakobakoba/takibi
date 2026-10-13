@@ -129,6 +129,25 @@ def _last_text():
     return SENT[-1].messages[0].text
 
 
+# 2026-10-13 に足した20語と、それぞれを含む自然な文（どの文も変更前の一覧には当たらない）
+ADDED_SAFETY_SAMPLES = {
+    "死にたく": "もう死にたくなる", "しにたく": "しにたくなる",
+    "死んでしまいたい": "死んでしまいたい", "しんでしまいたい": "しんでしまいたい",
+    "消えてしまいたい": "消えてしまいたい", "きえてしまいたい": "きえてしまいたい",
+    "消えたくな": "消えたくなる", "消えたくて": "消えたくて眠れない",
+    "きえたくな": "きえたくなる", "きえたくて": "きえたくて",
+    "いなくなってしまいたい": "いなくなってしまいたい", "生きていくのが嫌": "生きていくのが嫌になった",
+    "生きている意味がない": "生きている意味がない", "必要とされていない": "誰からも必要とされていない",
+    "共に逝": "母と共に逝きたい", "一緒に逝": "一緒に逝きたい", "一緒に死": "母と一緒に死ぬ",
+    "無理心中": "無理心中が頭をよぎる", "死んでしまえ": "早く死んでしまえと言った",
+    "たたいてしまい": "子どもをたたいてしまいそう",
+}
+# 普通の愚痴（どれも一覧に当たってはいけない）
+ORDINARY_COMPLAINTS = ["疲れた", "とにかく疲れた", "もう無理", "どうでもいい", "自分なんて",
+                       "死ぬほど眠い", "痛みが消えたくらいで", "心中お察しします",
+                       "自分で自分の首を締めてる", "家事が少しでも楽になりたい"]
+
+
 class TakibiTest(unittest.TestCase):
     def setUp(self):
         SENT.clear()
@@ -549,6 +568,46 @@ class TakibiTest(unittest.TestCase):
         CLAUDE_MODE["fail"] = True
         main.on_message(_event("聞いて"))
         self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+
+    # --- 危ない言葉の一覧（2026-10-13 追加分）。普通の愚痴には当たらない ---
+    def _send_fresh(self, text):
+        SENT.clear()
+        main.sessions.clear()
+        main.inflight.clear()
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event(text))
+
+    def test_added_safety_words_are_in_list(self):
+        self.assertEqual(len(ADDED_SAFETY_SAMPLES), 20)
+        self.assertEqual(len(set(main.SAFETY_USER_WORDS)), len(main.SAFETY_USER_WORDS))
+        for word, sentence in ADDED_SAFETY_SAMPLES.items():
+            self.assertIn(word, main.SAFETY_USER_WORDS)
+            self.assertIn(word, sentence)
+
+    def test_added_safety_words_set_flag_and_emergency_line(self):
+        for word, sentence in ADDED_SAFETY_SAMPLES.items():
+            with self.subTest(word=word):
+                self._send_fresh(sentence)
+                self.assertIs(main.sessions["U1"].get("safety"), True)
+                self.assertEqual(len(SENT), 1)
+                self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+
+    def test_ordinary_complaints_do_not_match_safety_words(self):
+        for sentence in ORDINARY_COMPLAINTS:
+            with self.subTest(sentence=sentence):
+                self.assertFalse(any(w in sentence for w in main.SAFETY_USER_WORDS))
+                self._send_fresh(sentence)
+                self.assertFalse(main.sessions["U1"].get("safety"))
+                self.assertNotIn("110", _last_text())
+                self.assertNotIn("119", _last_text())
+
+    def test_existing_safety_words_are_kept(self):
+        old = ["死にたい", "消えたい", "死のう", "自殺", "自分を傷つけ", "叩いてしまい", "手が出", "殺し",
+               "しにたい", "きえたい", "しのう", "死んだほうが", "いなくなりたい",
+               "傷つけ", "虐待", "限界", "首を絞め", "殴"]
+        for word in old:
+            self.assertIn(word, main.SAFETY_USER_WORDS)
+        self.assertEqual(main.SAFETY_USER_WORDS[:18], old)
 
     # --- 返事待ちの間に燃やしても応援リンクを出さない（会話の中身は覚えず、件数だけ見る） ---
     def test_no_support_link_when_burned_while_older_call_waits(self):
