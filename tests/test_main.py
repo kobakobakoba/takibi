@@ -145,7 +145,18 @@ ADDED_SAFETY_SAMPLES = {
 # 普通の愚痴（どれも一覧に当たってはいけない）
 ORDINARY_COMPLAINTS = ["疲れた", "とにかく疲れた", "もう無理", "どうでもいい", "自分なんて",
                        "死ぬほど眠い", "痛みが消えたくらいで", "心中お察しします",
-                       "自分で自分の首を締めてる", "家事が少しでも楽になりたい"]
+                       "自分で自分の首を締めてる", "家事が少しでも楽になりたい",
+                       "金魚が死んじゃった", "金魚が死んじゃいました", "お腹すいて死んじゃう", "保存したデータが消えちゃいました",
+                       "電気が消えちゃいそう", "眠くて死にそう", "夫が全然手伝わない", "手をたたいて喜んだ"]
+# 2026-10-14 に足した12語と、それぞれを含む自然な文（どの文も変更前の一覧（38語）には当たらない）
+ADDED_SAFETY_SAMPLES_2 = {
+    "叩いてしま": "つい子どもを叩いてしまった", "たたいてしま": "またたたいてしまう",
+    "叩きたく": "子どもを叩きたくなる", "たたきたく": "たたきたくなる",
+    "消えてなくなりたい": "消えてなくなりたい", "きえてなくなりたい": "きえてなくなりたい",
+    "死んじゃいた": "もう死んじゃいたくなる", "しんじゃいた": "しんじゃいたい",
+    "消えちゃいた": "消えちゃいたくなる", "きえちゃいた": "きえちゃいたい",
+    "叩いちゃい": "子どもを叩いちゃいそう", "たたいちゃい": "たたいちゃいました",
+}
 
 
 class TakibiTest(unittest.TestCase):
@@ -608,6 +619,23 @@ class TakibiTest(unittest.TestCase):
         for word in old:
             self.assertIn(word, main.SAFETY_USER_WORDS)
         self.assertEqual(main.SAFETY_USER_WORDS[:18], old)
+
+    # --- 危ない言葉の一覧（2026-10-14 追加分） ---
+    def test_added_safety_words_2_are_in_list(self):
+        self.assertEqual(len(ADDED_SAFETY_SAMPLES_2), 12)
+        for word, sentence in ADDED_SAFETY_SAMPLES_2.items():
+            self.assertIn(word, main.SAFETY_USER_WORDS)
+            self.assertIn(word, sentence)
+        self.assertEqual(len(set(main.SAFETY_USER_WORDS)), len(main.SAFETY_USER_WORDS))
+        self.assertEqual(main.SAFETY_USER_WORDS[18:38], list(ADDED_SAFETY_SAMPLES))
+
+    def test_added_safety_words_2_set_flag_and_emergency_line(self):
+        for word, sentence in ADDED_SAFETY_SAMPLES_2.items():
+            with self.subTest(word=word):
+                self._send_fresh(sentence)
+                self.assertIs(main.sessions["U1"].get("safety"), True)
+                self.assertEqual(len(SENT), 1)
+                self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
 
     # --- 返事待ちの間に燃やしても応援リンクを出さない（会話の中身は覚えず、件数だけ見る） ---
     def test_no_support_link_when_burned_while_older_call_waits(self):
