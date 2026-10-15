@@ -147,7 +147,8 @@ ORDINARY_COMPLAINTS = ["疲れた", "とにかく疲れた", "もう無理", "�
                        "死ぬほど眠い", "痛みが消えたくらいで", "心中お察しします",
                        "自分で自分の首を締めてる", "家事が少しでも楽になりたい",
                        "金魚が死んじゃった", "金魚が死んじゃいました", "お腹すいて死んじゃう", "保存したデータが消えちゃいました",
-                       "電気が消えちゃいそう", "眠くて死にそう", "夫が全然手伝わない", "手をたたいて喜んだ"]
+                       "電気が消えちゃいそう", "眠くて死にそう", "夫が全然手伝わない", "手をたたいて喜んだ",
+                       "ワンオペで疲れた", "ストレスがたまる", "ケアマネに電話した", "ミルクを作った", "ｵﾑﾂ替えが終わらない"]
 # 2026-10-14 に足した12語と、それぞれを含む自然な文（どの文も変更前の一覧（38語）には当たらない）
 ADDED_SAFETY_SAMPLES_2 = {
     "叩いてしま": "つい子どもを叩いてしまった", "たたいてしま": "またたたいてしまう",
@@ -157,6 +158,8 @@ ADDED_SAFETY_SAMPLES_2 = {
     "消えちゃいた": "消えちゃいたくなる", "きえちゃいた": "きえちゃいたい",
     "叩いちゃい": "子どもを叩いちゃいそう", "たたいちゃい": "たたいちゃいました",
 }
+# 2026-10-15：カタカナ・半角カナで書かれた危ない言葉（どの文も、そろえる前の一覧には当たらない）
+KANA_SAFETY_SAMPLES = ["シニタイ", "ｼﾆﾀｲ", "死ニタイ", "キエタクナル", "タタイテシマッタ", "ｼﾝｼﾞｬｲﾀｲ"]
 
 
 class TakibiTest(unittest.TestCase):
@@ -606,7 +609,7 @@ class TakibiTest(unittest.TestCase):
     def test_ordinary_complaints_do_not_match_safety_words(self):
         for sentence in ORDINARY_COMPLAINTS:
             with self.subTest(sentence=sentence):
-                self.assertFalse(any(w in sentence for w in main.SAFETY_USER_WORDS))
+                self.assertFalse(main.has_safety_words(sentence))
                 self._send_fresh(sentence)
                 self.assertFalse(main.sessions["U1"].get("safety"))
                 self.assertNotIn("110", _last_text())
@@ -636,6 +639,54 @@ class TakibiTest(unittest.TestCase):
                 self.assertIs(main.sessions["U1"].get("safety"), True)
                 self.assertEqual(len(SENT), 1)
                 self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+
+    # --- 照合の前に文字をそろえる（2026-10-15）。そろえた文は判定にだけ使う ---
+    def test_fold_kana_basics(self):
+        self.assertEqual(main.fold_kana("シニタイ"), "しにたい")
+        self.assertEqual(main.fold_kana("ｼﾝｼﾞｬｲﾀｲ"), "しんじゃいたい")
+        self.assertEqual(main.fold_kana("死ニタイ"), "死にたい")
+        self.assertEqual(main.fold_kana("シニターイ"), "しにたーい")
+        self.assertEqual(main.fold_kana("シ ニ"), "し に")
+        self.assertEqual(main.fold_kana("ヴ・ヶ"), "ゔ・ゖ")
+        self.assertEqual(main.fold_kana("夫が手伝わない"), "夫が手伝わない")
+
+    def test_safety_words_are_unchanged_by_folding(self):
+        for w in main.SAFETY_USER_WORDS:
+            self.assertEqual(main.fold_kana(w), w)
+
+    def test_combining_voiced_mark_does_not_hide_words_matched_before(self):
+        # 結合濁点（U+3099・半角 U+FF9E）は NFKC で手前の字とくっつくが、変更前に拾えた文は今も拾う
+        for s in ["死のゔ", "殺しﾞ", "しにたぐなる"]:
+            with self.subTest(text=s):
+                self.assertTrue(any(w in s for w in main.SAFETY_USER_WORDS))
+                self.assertTrue(main.has_safety_words(s))
+
+    def test_kana_safety_samples_set_flag_and_emergency_line(self):
+        for s in KANA_SAFETY_SAMPLES:
+            with self.subTest(text=s):
+                self.assertFalse(any(w in s for w in main.SAFETY_USER_WORDS))
+                self._send_fresh(s)
+                self.assertIs(main.sessions["U1"].get("safety"), True)
+                self.assertEqual(len(SENT), 1)
+                self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+
+    def test_kana_safety_words_on_apology_path_after_burn_during_wait(self):
+        CLAUDE_MODE["fail"] = True
+        CLAUDE_MODE["during"] = lambda: main.sessions.pop("U1", None)
+        main.on_message(_event("ｼﾆﾀｲ"))
+        self.assertEqual(len(SENT), 1)
+        self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+        self.assertNotIn("U1", main.sessions)
+        self.assertFalse(main.sessions_lock.locked())
+
+    def test_folded_text_is_not_sent_or_stored(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            main.on_message(_event("ｼﾆﾀｲ"))
+        self.assertEqual(CLAUDE_CALLS[-1]["messages"][-1]["content"], "ｼﾆﾀｲ")
+        self.assertEqual(main.sessions["U1"]["messages"][0]["content"], "ｼﾆﾀｲ")
+        self.assertIs(main.sessions["U1"].get("safety"), True)
+        self.assertEqual(out.getvalue() + err.getvalue(), "")
 
     # --- 返事待ちの間に燃やしても応援リンクを出さない（会話の中身は覚えず、件数だけ見る） ---
     def test_no_support_link_when_burned_while_older_call_waits(self):

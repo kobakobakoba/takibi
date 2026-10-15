@@ -8,6 +8,7 @@
 import os
 import threading
 import time
+import unicodedata
 
 import anthropic
 from flask import Flask, abort, request
@@ -74,6 +75,20 @@ SAFETY_USER_WORDS = ["死にたい", "消えたい", "死のう", "自殺", "自
                      "叩いてしま", "たたいてしま", "叩きたく", "たたきたく", "消えてなくなりたい", "きえてなくなりたい",
                      "死んじゃいた", "しんじゃいた", "消えちゃいた", "きえちゃいた", "叩いちゃい", "たたいちゃい"]
 SAFETY_REPLY_MARKERS = ["まもろうよ", "189", "親子のための相談", "地域包括支援センター", "ケアマネ", "110", "119", "相談窓口", "いのちの電話"]
+
+# 照合のためだけに文字をそろえる表：カタカナ（ァ〜ヶ）をひらがな（ぁ〜ゖ）に。ー・ヷ〜ヺ・「・」・ヽヾは変えない
+_KATA2HIRA = {c: c - 0x60 for c in range(0x30A1, 0x30F7)}
+
+
+def fold_kana(text: str) -> str:
+    """半角カナ→全角カナ（NFKC）→ひらがな。空白・「ー」・記号は消さない。元の文は変えず、結果はどこにも残さない"""
+    return unicodedata.normalize("NFKC", text).translate(_KATA2HIRA)
+
+
+def has_safety_words(text: str) -> bool:
+    """元の文かそろえた文のどちらかが SAFETY_USER_WORDS に当たるか（部分一致）。そろえた文はこの中だけで使う"""
+    folded = fold_kana(text)
+    return any(w in text or w in folded for w in SAFETY_USER_WORDS)
 
 SUPPORT_NOTE = (
     "\n\n――\n"
@@ -246,7 +261,7 @@ def on_message(event: MessageEvent):
         sweep_idle(now)
         history = get_history(user_id)
         s = sessions[user_id]
-        if any(w in text for w in SAFETY_USER_WORDS):
+        if has_safety_words(text):
             s["safety"] = True
         s["updated"] = now  # 返事待ちの間に、ほかの人の一括削除で消されないように
         history.append(msg)
@@ -286,7 +301,7 @@ def answer_and_reply(event, user_id: str, msg: dict, history: list[dict], to_sen
             s = sessions.get(user_id)
             flagged = s is not None and bool(s.get("safety"))
         answer = "ごめん、いま火の調子が悪いみたい。少ししてからもう一度送ってみて。"
-        if flagged or any(w in msg["content"] for w in SAFETY_USER_WORDS):
+        if flagged or has_safety_words(msg["content"]):
             answer += "\n\n" + APOLOGY_SAFETY_LINE
         reply(event.reply_token, answer)
         return
