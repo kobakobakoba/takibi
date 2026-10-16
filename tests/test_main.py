@@ -148,7 +148,8 @@ ORDINARY_COMPLAINTS = ["疲れた", "とにかく疲れた", "もう無理", "�
                        "自分で自分の首を締めてる", "家事が少しでも楽になりたい",
                        "金魚が死んじゃった", "金魚が死んじゃいました", "お腹すいて死んじゃう", "保存したデータが消えちゃいました",
                        "電気が消えちゃいそう", "眠くて死にそう", "夫が全然手伝わない", "手をたたいて喜んだ",
-                       "ワンオペで疲れた", "ストレスがたまる", "ケアマネに電話した", "ミルクを作った", "ｵﾑﾂ替えが終わらない"]
+                       "ワンオペで疲れた", "ストレスがたまる", "ケアマネに電話した", "ミルクを作った", "ｵﾑﾂ替えが終わらない",
+                       "肩をたたいてあげた", "叩かれた夢を見た"]
 # 2026-10-14 に足した12語と、それぞれを含む自然な文（どの文も変更前の一覧（38語）には当たらない）
 ADDED_SAFETY_SAMPLES_2 = {
     "叩いてしま": "つい子どもを叩いてしまった", "たたいてしま": "またたたいてしまう",
@@ -160,6 +161,12 @@ ADDED_SAFETY_SAMPLES_2 = {
 }
 # 2026-10-15：カタカナ・半角カナで書かれた危ない言葉（どの文も、そろえる前の一覧には当たらない）
 KANA_SAFETY_SAMPLES = ["シニタイ", "ｼﾆﾀｲ", "死ニタイ", "キエタクナル", "タタイテシマッタ", "ｼﾝｼﾞｬｲﾀｲ"]
+# 2026-10-16：叩いてしまった後のくだけた形（どの文も、変更前の50語には、そろえた後も当たらない）
+ADDED_SAFETY_SAMPLES_3 = {"叩いちゃ": "なんで今日叩いちゃったんだろう", "たたいちゃ": "つい子どもをたたいちゃった"}
+TATAICHA_SAMPLES = ["なんで今日叩いちゃったんだろう", "叩いちゃって自己嫌悪", "つい子どもをたたいちゃった",
+                    "タタイチャッタ", "ﾀﾀｲﾁｬｯﾀ"]
+# 受け入れる誤検知（安全審査部 2026-10-15 の条件）。当たってよい＝ORDINARY_COMPLAINTS に入れない
+ACCEPTED_FALSE_POSITIVES_3 = ["夫に軽口を叩いちゃった"]
 
 
 class TakibiTest(unittest.TestCase):
@@ -687,6 +694,31 @@ class TakibiTest(unittest.TestCase):
         self.assertEqual(main.sessions["U1"]["messages"][0]["content"], "ｼﾆﾀｲ")
         self.assertIs(main.sessions["U1"].get("safety"), True)
         self.assertEqual(out.getvalue() + err.getvalue(), "")
+
+    # --- 危ない言葉の一覧（2026-10-16 追加分：叩いちゃ・たたいちゃ） ---
+    def test_added_safety_words_3_are_in_list(self):
+        self.assertEqual(len(main.SAFETY_USER_WORDS), 52)
+        self.assertEqual(len(set(main.SAFETY_USER_WORDS)), len(main.SAFETY_USER_WORDS))
+        self.assertEqual(main.SAFETY_USER_WORDS[38:50], list(ADDED_SAFETY_SAMPLES_2))
+        self.assertEqual(main.SAFETY_USER_WORDS[50:], list(ADDED_SAFETY_SAMPLES_3))
+        for word, sentence in ADDED_SAFETY_SAMPLES_3.items():
+            self.assertIn(word, sentence)
+
+    def test_tataicha_samples_set_flag_and_emergency_line(self):
+        old = main.SAFETY_USER_WORDS[:50]
+        for s in TATAICHA_SAMPLES:
+            with self.subTest(text=s):
+                self.assertFalse(any(w in s or w in main.fold_kana(s) for w in old))
+                self._send_fresh(s)
+                self.assertIs(main.sessions["U1"].get("safety"), True)
+                self.assertEqual(len(SENT), 1)
+                self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+
+    def test_accepted_false_positive_karukuchi(self):
+        for s in ACCEPTED_FALSE_POSITIVES_3:
+            with self.subTest(text=s):
+                self.assertTrue(main.has_safety_words(s))
+                self.assertNotIn(s, ORDINARY_COMPLAINTS)
 
     # --- 返事待ちの間に燃やしても応援リンクを出さない（会話の中身は覚えず、件数だけ見る） ---
     def test_no_support_link_when_burned_while_older_call_waits(self):
