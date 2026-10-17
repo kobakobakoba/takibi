@@ -253,6 +253,13 @@ class TakibiTest(unittest.TestCase):
         main.on_message(_event("聞いて"))
         self.assertEqual(CLAUDE_CALLS[-1]["system"], main.SYSTEM_PROMPT)
 
+    def test_persona_does_not_push_or_dismiss_repeats(self):
+        # 励まし・発破をかけない／くり返しを軽く扱わない（PERSONA に足し、SAFETY は触らない）
+        for phrase in ["「がんばって」", "励まし", "「また？」", "はじめて聞くように"]:
+            self.assertIn(phrase, main.PERSONA)
+            self.assertNotIn(phrase, main.SAFETY)
+        self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
+
     # --- 応援リンク（燃やしたあと、条件を満たすときだけ） ---
     URL = "https://example.com/x"
 
