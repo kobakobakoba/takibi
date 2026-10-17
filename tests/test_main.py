@@ -255,9 +255,10 @@ class TakibiTest(unittest.TestCase):
 
     def test_persona_does_not_push_or_dismiss_repeats(self):
         # 励まし・発破をかけない／くり返しを軽く扱わない（PERSONA に足し、SAFETY は触らない）
-        for phrase in ["「がんばって」", "励まし", "「また？」", "はじめて聞くように"]:
+        for phrase in ["「がんばって」", "励まし", "「また？」", "軽く扱わず", "しんどさが増して", "心配していると伝える"]:
             self.assertIn(phrase, main.PERSONA)
             self.assertNotIn(phrase, main.SAFETY)
+        self.assertNotIn("はじめて聞くように", main.PERSONA)
         self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
 
     # --- 応援リンク（燃やしたあと、条件を満たすときだけ） ---
