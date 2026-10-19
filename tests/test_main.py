@@ -261,6 +261,14 @@ class TakibiTest(unittest.TestCase):
         self.assertNotIn("はじめて聞くように", main.PERSONA)
         self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
 
+    def test_persona_mentions_overlapping_care(self):
+        # ダブルケア・複数の家族の世話（PERSONA の地の文に足し、SAFETY は触らない）
+        for phrase in ["育児と介護が重なっている", "何人もの家族", "決めつけず", "重なったしんどさ"]:
+            self.assertIn(phrase, main.PERSONA)
+            self.assertNotIn(phrase, main.SAFETY)
+        self.assertIn("相手は、子どもや親・家族の世話を毎日がんばっている人です。\n育児と介護", main.PERSONA)
+        self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
+
     # --- 応援リンク（燃やしたあと、条件を満たすときだけ） ---
     URL = "https://example.com/x"
 
