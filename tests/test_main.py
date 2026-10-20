@@ -269,6 +269,17 @@ class TakibiTest(unittest.TestCase):
         self.assertIn("相手は、子どもや親・家族の世話を毎日がんばっている人です。\n育児と介護", main.PERSONA)
         self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
 
+    def test_persona_meets_self_blame_without_excusing_acts(self):
+        # 自分を責める言葉への応じ方（PERSONA のふるまいに足し、SAFETY は触らない）
+        for phrase in ["自分を責める言葉", "言い負かして", "疲れていることを受け止める",
+                       "「仕方ない」「誰でもある」と軽くはしない", "責め立てもしない"]:
+            self.assertIn(phrase, main.PERSONA)
+            self.assertNotIn(phrase, main.SAFETY)
+        for phrase in ["あなたは悪くない", "謝", "安全の指示に従う"]:
+            self.assertNotIn(phrase, main.PERSONA)
+        self.assertIn("本人の疲れに寄り添う。\n- 自分を責める言葉", main.PERSONA)
+        self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
+
     # --- 応援リンク（燃やしたあと、条件を満たすときだけ） ---
     URL = "https://example.com/x"
 
