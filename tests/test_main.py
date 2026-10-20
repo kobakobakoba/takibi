@@ -266,7 +266,7 @@ class TakibiTest(unittest.TestCase):
         for phrase in ["育児と介護が重なっている", "何人もの家族", "決めつけず", "重なったしんどさ"]:
             self.assertIn(phrase, main.PERSONA)
             self.assertNotIn(phrase, main.SAFETY)
-        self.assertIn("相手は、子どもや親・家族の世話を毎日がんばっている人です。\n育児と介護", main.PERSONA)
+        self.assertIn("相手は、子どもや親・家族の世話をしている人です。\n育児と介護", main.PERSONA)
         self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
 
     def test_persona_meets_self_blame_without_excusing_acts(self):
@@ -278,6 +278,15 @@ class TakibiTest(unittest.TestCase):
         for phrase in ["あなたは悪くない", "謝", "安全の指示に従う"]:
             self.assertNotIn(phrase, main.PERSONA)
         self.assertIn("本人の疲れに寄り添う。\n- 自分を責める言葉", main.PERSONA)
+        self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
+
+    def test_persona_describes_carers_without_daily_or_praise(self):
+        # 39行：「毎日」「がんばっている」で決めつけず、世話という行為で書く（SAFETY は触らない）
+        self.assertIn("\n相手は、子どもや親・家族の世話をしている人です。\n", main.PERSONA)
+        for phrase in ["毎日がんばっている", "世話を毎日", "がんばっている人"]:
+            self.assertNotIn(phrase, main.PERSONA)
+        for phrase in ["ケアラー", "介護者"]:
+            self.assertNotIn(phrase, main.PERSONA)
         self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
 
     # --- 応援リンク（燃やしたあと、条件を満たすときだけ） ---
