@@ -289,6 +289,12 @@ class TakibiTest(unittest.TestCase):
             self.assertNotIn(phrase, main.PERSONA)
         self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
 
+    def test_persona_does_not_assume_daily_care(self):
+        # 45行：イライラは「それだけ向き合っている証拠」。「毎日」で決めつけない（SAFETY は触らない）
+        self.assertIn("イライラするのは、それだけ向き合っている証拠として扱う。\n- ただし、", main.PERSONA)
+        self.assertNotIn("毎日", main.PERSONA)
+        self.assertEqual(main.SYSTEM_PROMPT, main.PERSONA + "\n" + main.SAFETY)
+
     # --- 応援リンク（燃やしたあと、条件を満たすときだけ） ---
     URL = "https://example.com/x"
 
