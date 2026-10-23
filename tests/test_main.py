@@ -408,6 +408,22 @@ class TakibiTest(unittest.TestCase):
         for bad in ["完全に", "どこにも残", "1時間で消", "自動で消"]:
             self.assertNotIn(bad, main.HELP_TEXT)
 
+    def test_help_explains_reply_after_burn_during_wait(self):
+        # 使い方の説明（返事待ちの間に燃やすと、燃やしたあとに返事が届く。会話には加えない）が今の動きと合うこと
+        line = ("・返事を待っている間に「燃やす」と送ると、燃やしたあとにAIの返事が届くことがあります。"
+                "燃やす前に送った言葉への返事で、焚き火のサーバーの会話には加えません。\n")
+        self.assertIn("前の会話は消えます）\n" + line + "\n【残るもの】", main.HELP_TEXT)
+
+        def burn_then_talk():
+            CLAUDE_MODE["during"] = None
+            main.on_message(_event(main.BURN_WORD))
+            main.on_message(_event("新しい話"))
+        CLAUDE_MODE["during"] = burn_then_talk
+        main.on_message(_event("愚痴"))
+        self.assertEqual([r.messages[0].text for r in SENT], [main.BURN_REPLY, "それはしんどいね。", "それはしんどいね。"])
+        self.assertEqual(main.sessions["U1"]["messages"], [
+            {"role": "user", "content": "新しい話"}, {"role": "assistant", "content": "それはしんどいね。"}])
+
     def test_help_mentions_support_only_when_set(self):
         main.on_message(_event("使い方"))
         self.assertNotIn("応援", _last_text())
