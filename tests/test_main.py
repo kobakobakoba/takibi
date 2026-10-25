@@ -846,6 +846,27 @@ class TakibiTest(unittest.TestCase):
         main.on_message(_event(main.BURN_WORD))
         self.assertNotIn(self.URL, _last_text())
 
+    def test_reply_failure_keeps_safety_message_for_next_call(self):
+        # 危ない言葉が当たった発言は、返事が届かなくても残す。届かなかった返事だけ外し、次の呼び出しで AI に見せる
+        for said in ["もう死にたい", "もうｼﾆﾀｲ"]:
+            self.setUp()
+            CLAUDE_MODE["reply_fail"] = True
+            main.on_message(_event(said))
+            self.assertEqual(main.sessions["U1"]["messages"], [{"role": "user", "content": said}], said)
+            CLAUDE_MODE["reply_fail"] = False
+            main.on_message(_event("聞いて"))
+            self.assertEqual(CLAUDE_CALLS[-1]["messages"], [
+                {"role": "user", "content": said}, {"role": "user", "content": "聞いて"}], said)
+            self.assertEqual(main.sessions["U1"]["messages"][-1], {"role": "assistant", "content": "それはしんどいね。"})
+            self.assertFalse(main.sessions_lock.locked())
+
+    def test_reply_failure_keeps_message_when_unseen_answer_had_safety_marker(self):
+        # 届かなかった返事に相談先の案内があったときも元の発言は残し、返事（案内）は残さない
+        CLAUDE_MODE.update(answer="189に相談できるよ", reply_fail=True)
+        main.on_message(_event("しんどい"))
+        self.assertEqual(main.sessions["U1"]["messages"], [{"role": "user", "content": "しんどい"}])
+        self.assertIs(main.sessions["U1"]["safety"], True)
+
     def test_reply_failure_outputs_no_content(self):
         CLAUDE_MODE["reply_fail"] = True
         out, err = io.StringIO(), io.StringIO()

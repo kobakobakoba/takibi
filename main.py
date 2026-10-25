@@ -324,9 +324,11 @@ def answer_and_reply(event, user_id: str, msg: dict, history: list[dict], to_sen
             history.append(ans_msg)
             s["updated"] = time.time()
     if not reply(event.reply_token, answer):
-        # 届かなかった返事と、その元の発言を履歴から外す（安全フラグは残す）
+        # 届かなかった返事は履歴から外す。元の発言は、危ない言葉が当たるか、届かなかった返事に相談先の案内が
+        # 入っていたときだけ残す（次の返事で受け止め直せるように。安全フラグは残す。記録先はメモリの会話だけ）
+        keep = has_safety_words(msg["content"]) or any(k in answer for k in SAFETY_REPLY_MARKERS)
         with sessions_lock:
-            history[:] = [m for m in history if m is not msg and m is not ans_msg]
+            history[:] = [m for m in history if m is not ans_msg and (keep or m is not msg)]
 
 
 if __name__ == "__main__":
