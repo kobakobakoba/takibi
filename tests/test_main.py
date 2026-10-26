@@ -869,18 +869,20 @@ class TakibiTest(unittest.TestCase):
 
     def test_reply_failure_kept_message_is_erased_by_burn_unsend_and_idle(self):
         # 返信失敗で残した危ない発言も、燃やす・送信取消・1時間あくと消え、次の AI 呼び出しに送らない（約束1）
-        for erase in [lambda: main.on_message(_event(main.BURN_WORD)),
-                      lambda: main.on_unsend(_unsend()),
-                      lambda: main.sessions["U1"].update(updated=time.time() - main.IDLE_SECONDS - 1)]:
-            self.setUp()
-            CLAUDE_MODE["reply_fail"] = True
-            main.on_message(_event("もう死にたい"))
-            self.assertEqual(main.sessions["U1"]["messages"], [{"role": "user", "content": "もう死にたい"}])
-            CLAUDE_MODE["reply_fail"] = False
-            erase()
-            main.on_message(_event("聞いて"))
-            self.assertEqual(CLAUDE_CALLS[-1]["messages"], [{"role": "user", "content": "聞いて"}])
-            self.assertFalse(main.sessions["U1"].get("safety"))
+        for path, erase in [("burn", lambda: main.on_message(_event(main.BURN_WORD))),
+                            ("unsend", lambda: main.on_unsend(_unsend())),
+                            ("idle", lambda: main.sessions["U1"].update(
+                                updated=time.time() - main.IDLE_SECONDS - 1))]:
+            with self.subTest(path=path):
+                self.setUp()
+                CLAUDE_MODE["reply_fail"] = True
+                main.on_message(_event("もう死にたい"))
+                self.assertEqual(main.sessions["U1"]["messages"], [{"role": "user", "content": "もう死にたい"}])
+                CLAUDE_MODE["reply_fail"] = False
+                erase()
+                main.on_message(_event("聞いて"))
+                self.assertEqual(CLAUDE_CALLS[-1]["messages"], [{"role": "user", "content": "聞いて"}])
+                self.assertFalse(main.sessions["U1"].get("safety"))
 
     def test_reply_failure_after_burn_during_wait_does_not_restore_message(self):
         # 返事待ちの間に燃やして新しい会話を始め、そのあと古い返事の送信が失敗しても、古い発言は新しい会話に入らない
