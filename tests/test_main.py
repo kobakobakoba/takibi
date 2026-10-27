@@ -435,6 +435,12 @@ class TakibiTest(unittest.TestCase):
     def test_welcome_mentions_help(self):
         self.assertIn("使い方", main.WELCOME)
 
+    def test_welcome_invites_night_messages_without_overpromising(self):
+        # 夜中でもひとことだけ送ってよいと伝える。すぐ返す・いつでも・窓口の代わり、とは書かない
+        self.assertIn("夜中でも、寝かしつけや介護の合間でも、ひとことだけでも書いて送ってください。", main.WELCOME)
+        for bad in ["すぐ返", "必ず返", "いつでも", "24時間", "窓口", "代わり"]:
+            self.assertNotIn(bad, main.WELCOME, bad)
+
     def test_welcome_and_burn_reply_do_not_overpromise(self):
         banned = ["完全に", "どこにも残", "1時間で消", "自動で消",
                   "もう残っていません", "サーバーからぜんぶ"]
