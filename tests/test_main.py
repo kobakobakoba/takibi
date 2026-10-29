@@ -924,6 +924,39 @@ class TakibiTest(unittest.TestCase):
             self.assertNotIn(secret, logged)
         self.assertIn("reply failed", logged)
 
+    def test_no_output_on_paths_other_than_reply_failure(self):
+        # 約束2：会話をログに残さない。おわび・燃やす・使い方・送信取消・友だち追加も含め、どの経路も何も出力しない
+        def api_fail():
+            CLAUDE_MODE["fail"] = True
+            main.on_message(_event("もう死にたい"))
+
+        def empty_answer():
+            CLAUDE_MODE["answer"] = " "
+            main.on_message(_event("もう死にたい"))
+        for path, step in [("normal", lambda: main.on_message(_event("夫が手伝わない"))),
+                           ("api_fail", api_fail), ("empty", empty_answer),
+                           ("help", lambda: main.on_message(_event("使い方"))),
+                           ("burn", lambda: main.on_message(_event(main.BURN_WORD))),
+                           ("unsend", lambda: main.on_unsend(_unsend())),
+                           ("follow", lambda: main.on_follow(types.SimpleNamespace(reply_token="tok")))]:
+            with self.subTest(path=path):
+                self.setUp()
+                main.on_message(_event("前置きの愚痴"))  # 燃やす・送信取消で消す会話を先に作る
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    step()
+                self.assertEqual(out.getvalue() + err.getvalue(), "")
+
+    def test_source_has_no_logging_or_outside_sending(self):
+        # 約束2：ログや外部サービスへ会話を出す仕組みを足さない。print は返信失敗の1か所（例外の種類名だけ）
+        with open(main.__file__, encoding="utf-8") as f:
+            src = f.read()
+        for forbidden in ["logging", "logger", "traceback", "stderr", "write(", "shelve",
+                          "urllib", "requests", "http.client", "socket"]:
+            self.assertNotIn(forbidden, src, forbidden)
+        self.assertEqual(src.count("print("), 1)
+        self.assertIn('print("reply failed:", type(e).__name__, flush=True)', src)
+
     def test_parallel_messages_do_not_crash(self):
         old = time.time() - main.IDLE_SECONDS - 1
         for i in range(30):
