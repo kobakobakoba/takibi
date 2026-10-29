@@ -441,6 +441,14 @@ class TakibiTest(unittest.TestCase):
         for bad in ["すぐ返", "必ず返", "いつでも", "24時間", "窓口", "代わり"]:
             self.assertNotIn(bad, main.WELCOME, bad)
 
+    def test_help_text_invites_night_messages_same_as_welcome(self):
+        # 既存の友だちにも届くよう、使い方にもあいさつと同じ1行を置く。言いすぎない
+        line = "夜中でも、寝かしつけや介護の合間でも、ひとことだけでも書いて送ってください。\n"
+        self.assertIn(line, main.WELCOME)
+        self.assertIn("AIが短く受け止めます。\n" + line + "スッキリしたら", main.HELP_TEXT)
+        for bad in ["すぐ返", "必ず返", "いつでも", "24時間", "窓口", "代わり"]:
+            self.assertNotIn(bad, main.HELP_TEXT, bad)
+
     def test_welcome_and_burn_reply_do_not_overpromise(self):
         banned = ["完全に", "どこにも残", "1時間で消", "自動で消",
                   "もう残っていません", "サーバーからぜんぶ"]
