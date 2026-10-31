@@ -458,6 +458,18 @@ class TakibiTest(unittest.TestCase):
             for word in banned:
                 self.assertNotIn(word, text)
 
+    def test_welcome_says_replies_are_written_by_ai(self):
+        # AIと話していることを、友だち追加のあいさつの始めで伝える（使い方と同じ言い方。Anthropic 利用ポリシー 2026-11-12 施行）
+        phrase = "AIが短く受け止めます。"
+        self.assertIn(phrase, main.HELP_TEXT)
+        self.assertTrue(main.WELCOME.split("\n")[1].endswith("吐き出してOK。" + phrase))
+        self.assertLess(main.WELCOME.index("AI"), main.WELCOME.index("夜中でも"))
+        main.on_follow(types.SimpleNamespace(reply_token="tok"))
+        self.assertEqual(_last_text(), main.WELCOME)
+        self.assertEqual(len(main.WELCOME.split("\n")), 5)  # 行は増やさない（10-29 の申し送り）
+        for bad in ["人間", "スタッフ", "相談員", "カウンセラー", "専門家", "Anthropic", "Claude"]:
+            self.assertNotIn(bad, main.WELCOME, bad)
+
     # --- 送信取消（燃やすと同じく会話を消す。返事はしない） ---
     def test_unsend_handler_is_registered(self):
         self.assertIs(main.handler.handlers.get("UnsendEvent"), main.on_unsend)
