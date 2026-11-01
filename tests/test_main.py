@@ -945,12 +945,21 @@ class TakibiTest(unittest.TestCase):
         def empty_answer():
             CLAUDE_MODE["answer"] = " "
             main.on_message(_event("もう死にたい"))
+
+        def burn_with_support():
+            os.environ["SUPPORT_URL"] = self.URL
+            main.on_message(_event(main.BURN_WORD))
+
+        def help_with_support():
+            os.environ["SUPPORT_URL"] = self.URL
+            main.on_message(_event("使い方"))
         for path, step in [("normal", lambda: main.on_message(_event("夫が手伝わない"))),
                            ("api_fail", api_fail), ("empty", empty_answer),
                            ("help", lambda: main.on_message(_event("使い方"))),
                            ("burn", lambda: main.on_message(_event(main.BURN_WORD))),
                            ("unsend", lambda: main.on_unsend(_unsend())),
-                           ("follow", lambda: main.on_follow(types.SimpleNamespace(reply_token="tok")))]:
+                           ("follow", lambda: main.on_follow(types.SimpleNamespace(reply_token="tok"))),
+                           ("burn_support", burn_with_support), ("help_support", help_with_support)]:
             with self.subTest(path=path):
                 self.setUp()
                 main.on_message(_event("前置きの愚痴"))  # 燃やす・送信取消で消す会話を先に作る
@@ -958,13 +967,17 @@ class TakibiTest(unittest.TestCase):
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                     step()
                 self.assertEqual(out.getvalue() + err.getvalue(), "")
+                if path.endswith("_support"):  # 応援リンクの枝を本当に通ったか
+                    expected = self.URL if path == "burn_support" else main.HELP_SUPPORT_NOTE.strip()
+                    self.assertIn(expected, _last_text())
 
     def test_source_has_no_logging_or_outside_sending(self):
         # 約束2：ログや外部サービスへ会話を出す仕組みを足さない。print は返信失敗の1か所（例外の種類名だけ）
         with open(main.__file__, encoding="utf-8") as f:
             src = f.read()
         for forbidden in ["logging", "logger", "traceback", "stderr", "write(", "shelve",
-                          "urllib", "requests", "http.client", "socket"]:
+                          "urllib", "requests", "http.client", "socket",
+                          "httpx", "aiohttp", "smtplib", "subprocess", "importlib", "sys.stdout"]:
             self.assertNotIn(forbidden, src, forbidden)
         self.assertEqual(src.count("print("), 1)
         self.assertIn('print("reply failed:", type(e).__name__, flush=True)', src)
