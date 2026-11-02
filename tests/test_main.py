@@ -458,6 +458,18 @@ class TakibiTest(unittest.TestCase):
             for word in banned:
                 self.assertNotIn(word, text)
 
+    def test_burn_reply_wishes_a_breather_without_orders_or_promises(self):
+        # 燃やした後に、ひと息つく方向の一言を願いの形で添える（docs/research/2026-11-02.md の 4-1）。指図・効き目の約束・夜の呼びかけはしない
+        self.assertTrue(main.BURN_REPLY.endswith("今日もおつかれさま。\n少しでも、ひと息つけますように。"))
+        self.assertEqual(len(main.BURN_REPLY.split("\n")), 4)
+        for bad in ["戻っ", "しましょう", "してください", "深呼吸", "スッキリ", "楽にな", "怒り", "大丈夫", "効", "夜中", "いつでも"]:
+            self.assertNotIn(bad, main.BURN_REPLY, bad)
+        # 安全フラグが立った会話のあとでも同じ固定文だけが出る（応援リンクは付かない）
+        os.environ["SUPPORT_URL"] = self.URL
+        main.on_message(_event("死にたい"))
+        main.on_message(_event(main.BURN_WORD))
+        self.assertEqual(_last_text(), main.BURN_REPLY)
+
     def test_welcome_says_replies_are_written_by_ai(self):
         # AIと話していることを、友だち追加のあいさつの始めで伝える（使い方と同じ言い方。Anthropic 利用ポリシー 2026-11-12 施行）
         phrase = "AIが短く受け止めます。"
