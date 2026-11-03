@@ -253,6 +253,28 @@ class TakibiTest(unittest.TestCase):
         main.on_message(_event("聞いて"))
         self.assertEqual(CLAUDE_CALLS[-1]["system"], main.SYSTEM_PROMPT)
 
+    # 約束5：SAFETY ブロックの全文の写し（main.py 58〜64行）。オーナーの明示的な承認があった日だけ、main.py と同じ差分で直す
+    SAFETY_EXPECTED = (
+        "安全（最優先）:\n"
+        "- 死にたい、消えたい、自分を傷つけたいという話が出たら、受け止めたうえで、信頼できる人や専門の相談窓口に話すよう優しく勧める"
+        "（例：厚生労働省「まもろうよ こころ」で電話・SNSの相談先を探せる）。\n"
+        "- 子どもを叩いてしまいそう・傷つけてしまいそうという話が出たら、責めずに受け止め、まず子どもから少し離れて深呼吸することを勧め、"
+        "お住まいの自治体の「親子のための相談LINE」や、児童相談所の相談ダイヤル189を案内する。\n"
+        "- 介護している相手に手が出そう・限界という話が出たら、責めずに受け止め、地域包括支援センターやケアマネジャーに「限界」と伝えていいことを案内する。\n"
+        "- 誰かの命や安全が今まさに危ない場合は、110番・119番を案内する。\n"
+        "- 医療や薬について診断・判断はしない。専門家への相談を勧める。\n"
+    )
+
+    def test_safety_block_is_unchanged_word_for_word(self):
+        # 約束5：SAFETY を一字一句見張る（5語だけの確認では「責めずに」「優しく」や医療の行が消えても通ってしまう）
+        self.assertEqual(main.SAFETY, self.SAFETY_EXPECTED)
+        with open(main.__file__, encoding="utf-8") as f:
+            src = f.read()
+        self.assertEqual(src.count("# --- SAFETY START"), 1)
+        self.assertEqual(src.count("# --- SAFETY END ---"), 1)
+        block = src.split("# --- SAFETY START", 1)[1].split("# --- SAFETY END ---", 1)[0]
+        self.assertIn('SAFETY = """' + self.SAFETY_EXPECTED + '"""', block)
+
     def test_persona_does_not_push_or_dismiss_repeats(self):
         # 励まし・発破をかけない／くり返しを軽く扱わない（PERSONA に足し、SAFETY は触らない）
         for phrase in ["「がんばって」", "励まし", "「また？」", "軽く扱わず", "しんどさが増して", "心配していると伝える"]:
