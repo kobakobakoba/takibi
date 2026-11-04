@@ -222,6 +222,29 @@ class TakibiTest(unittest.TestCase):
         self.assertIn("もう一度", _last_text())
         self.assertEqual(main.sessions["U1"]["messages"], [])
 
+    def test_claude_is_called_with_only_the_expected_arguments(self):
+        # API の版「2026-10-21」（SDK 2.x が送る）では temperature・top_p・top_k を送ると 400 になり、全員におわびが返る
+        # （docs/research/2026-11-04.md）。max_tokens と既定モデルはコストの規則（CLAUDE.md）。
+        # このテストが見るのは会社の側の呼び方の変化だけ（SDK そのものの壊れは偽物なので分からない）。
+        # 変える日は、このテストを同じ差分で直して安全審査部に出す
+        main.on_message(_event("1つ目"))
+        main.on_message(_event("2つ目"))  # assistant の発言も入った形を見る
+        kwargs = CLAUDE_CALLS[-1]
+        self.assertEqual(set(kwargs), {"model", "max_tokens", "system", "messages"})
+        self.assertEqual(kwargs["max_tokens"], 400)
+        self.assertEqual(kwargs["model"], main.MODEL)
+        self.assertIsInstance(kwargs["system"], str)
+        self.assertEqual([m["role"] for m in kwargs["messages"]], ["user", "assistant", "user"])
+        for m in kwargs["messages"]:
+            self.assertEqual(set(m), {"role", "content"})
+            self.assertIsInstance(m["content"], str)
+        with open(main.__file__, encoding="utf-8") as f:
+            src = f.read()
+        self.assertEqual(src.count("messages.create("), 1)
+        # キーは環境変数から読む。SDK 2.x は api_key と auth_token を両方渡すとエラー
+        self.assertEqual(src.count("anthropic.Anthropic()"), 1)
+        self.assertIn('os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")', src)
+
     # --- 燃やす（このサービスの約束） ---
     def test_burn_erases_history_and_does_not_call_claude(self):
         main.on_message(_event("愚痴"))
