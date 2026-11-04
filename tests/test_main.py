@@ -494,6 +494,22 @@ class TakibiTest(unittest.TestCase):
         for bad in ["すぐ返", "必ず返", "いつでも", "24時間", "窓口", "代わり"]:
             self.assertNotIn(bad, main.HELP_TEXT, bad)
 
+    def test_help_text_says_advice_only_when_asked(self):
+        # PERSONA 48行（頼まれていないアドバイスは出さない）を使い方でも伝える（docs/research/2026-11-05.md）。
+        # 言い切らない・質問を呼び込まない・SAFETY の案内（頼まれなくても相談先を勧める）と食い違わない
+        line = "育児や介護のやり方のアドバイスは、聞かれたときだけにしています。\n"
+        self.assertIn("その場で消します。\n" + line + "\n【消えるもの】", main.HELP_TEXT)
+        self.assertEqual(main.HELP_TEXT.count("アドバイス"), 1)
+        for bad in ["しません", "絶対", "一切", "何でも答え", "相談に乗", "聞いてください", "診断", "解決", "専門"]:
+            self.assertNotIn(bad, line, bad)
+        for bad in ["何でも答え", "相談に乗", "診断"]:
+            self.assertNotIn(bad, main.HELP_TEXT, bad)
+        # PERSONA の該当行が変わったら、この説明も見直す（PERSONA は休み中）
+        self.assertIn("頼まれていないアドバイスや育児・介護のノウハウは出さない。聞かれたときだけ", main.PERSONA)
+        self.assertNotIn("アドバイス", main.SAFETY)
+        self.assertNotIn("アドバイス", main.WELCOME)  # あいさつは5行のまま（10-31）
+        self.assertTrue(main.HELP_TEXT.endswith("\n\n" + main.APOLOGY_SAFETY_LINE))
+
     def test_welcome_and_burn_reply_do_not_overpromise(self):
         banned = ["完全に", "どこにも残", "1時間で消", "自動で消",
                   "もう残っていません", "サーバーからぜんぶ"]
