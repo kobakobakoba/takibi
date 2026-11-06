@@ -31,6 +31,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
 BURN_WORD = "燃やす"
+BURN_TRAILING = "。．.！!"  # 「燃やす」の文末にあっても燃やす記号。？・絵文字・ひらがなは入れない（docs/research/2026-11-06.md）
 MAX_TURNS = 20             # 1人あたり保持する発言数の上限
 IDLE_SECONDS = 60 * 60     # 1時間話さなければ、次に話しかけたとき新しい会話にする（前の会話は消える）
 
@@ -249,7 +250,7 @@ def on_message(event: MessageEvent):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    if text == BURN_WORD:
+    if text.rstrip(BURN_TRAILING) == BURN_WORD:  # 判定だけに使い、text は上書きしない
         with sessions_lock:
             s = sessions.pop(user_id, None)
             waiting = user_id in inflight  # 相談先の案内が後から届くかもしれない間は応援リンクを出さない

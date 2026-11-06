@@ -254,6 +254,33 @@ class TakibiTest(unittest.TestCase):
         self.assertEqual(len(CLAUDE_CALLS), calls)
         self.assertEqual(_last_text(), main.BURN_REPLY)
 
+    def test_burn_accepts_trailing_period_or_exclamation(self):
+        # 音声入力の句点・ボタンが消えた後の手打ち（docs/research/2026-11-06.md）
+        for word in ["燃やす。", "燃やす．", "燃やす.", "燃やす！", "燃やす!", "燃やす！！", "燃やす!!!",
+                     "燃やす。。", "燃やす！。", " 燃やす。 ", "燃やす！\u3000", "燃やす。\n"]:
+            with self.subTest(word=word):
+                main.on_message(_event("愚痴"))
+                calls = len(CLAUDE_CALLS)
+                main.on_message(_event(word))
+                self.assertNotIn("U1", main.sessions)
+                self.assertEqual(len(CLAUDE_CALLS), calls)
+                self.assertEqual(_last_text(), main.BURN_REPLY)
+                self.assertIsNone(SENT[-1].messages[0].quick_reply)
+
+    def test_burn_variants_that_are_not_burn_go_to_claude(self):
+        # ？・絵文字・ひらがな・文の一部は燃やさない。送る文は strip しただけの元の文
+        for word in ["燃やす？", "燃やす?", "燃やす！？", "燃やす?!", "燃やす ！", "燃やす🔥", "🔥燃やす",
+                     "燃やす…", "燃やす、", "もやす", "もやす。", "モヤス", "。燃やす",
+                     "燃やしたい", "全部燃やす。", "家を燃やす！", "燃やす。燃やす。", "！！"]:
+            with self.subTest(word=word):
+                main.sessions.clear()
+                calls = len(CLAUDE_CALLS)
+                main.on_message(_event(word))
+                self.assertIn("U1", main.sessions)
+                self.assertEqual(len(CLAUDE_CALLS), calls + 1)
+                self.assertEqual(CLAUDE_CALLS[-1]["messages"][-1]["content"], word.strip())
+                self.assertNotEqual(_last_text(), main.BURN_REPLY)
+
     def test_idle_session_expires(self):
         main.on_message(_event("愚痴"))
         main.sessions["U1"]["updated"] -= main.IDLE_SECONDS + 1
@@ -400,6 +427,18 @@ class TakibiTest(unittest.TestCase):
             main.on_message(_event("愚痴"))
             main.on_message(_event(main.BURN_WORD))
             self.assertEqual(_last_text(), main.BURN_REPLY, bad)
+
+    def test_burn_with_trailing_mark_keeps_support_link_rules(self):
+        self.assertEqual(main.BURN_TRAILING, "。．.！!")  # ？を足す日は審査に出す
+        os.environ["SUPPORT_URL"] = self.URL
+        main.on_message(_event("愚痴"))
+        main.on_message(_event("燃やす！"))
+        self.assertIn(self.URL, _last_text())  # 「燃やす」と同じ条件で出る
+        CLAUDE_MODE["fail"] = True
+        main.on_message(_event("死にたい"))
+        main.on_message(_event("燃やす。"))
+        self.assertNotIn("U1", main.sessions)
+        self.assertNotIn(self.URL, _last_text())  # 安全フラグがあれば出ない
 
     def test_safety_flag_stores_no_content(self):
         main.on_message(_event("死にたい"))
