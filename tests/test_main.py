@@ -399,6 +399,41 @@ class TakibiTest(unittest.TestCase):
         main.on_message(_event(main.BURN_WORD))
         self.assertNotIn(self.URL, _last_text())
 
+    def test_existing_safety_reply_markers_are_kept(self):
+        old = ["まもろうよ", "189", "親子のための相談", "地域包括支援センター", "ケアマネ", "110", "119", "相談窓口", "いのちの電話"]
+        self.assertEqual(main.SAFETY_REPLY_MARKERS[:9], old)
+
+    def test_reply_naming_only_a_contact_sets_safety_flag(self):
+        # 窓口名だけを書いた返事でもフラグが立ち、燃やしても応援リンクが出ない（docs/research/2026-11-07.md）
+        os.environ["SUPPORT_URL"] = self.URL
+        self.assertFalse(main.has_safety_words("しんどい"))
+        added = ["いのちSOS", "よりそいホットライン", "こころの健康相談", "あなたのいばしょ", "生きづらびっと",
+                 "こころのほっとチャット", "チャイルドライン", "児童相談所"]
+        for name in added:
+            with self.subTest(name=name):
+                self.assertIn(name, main.SAFETY_REPLY_MARKERS)
+                answer = name + "に話してみるのもひとつだよ。"
+                for old in main.SAFETY_REPLY_MARKERS[:9]:
+                    self.assertNotIn(old, answer)  # 前からある目印で当たったのではないこと
+                main.sessions.clear()
+                CLAUDE_MODE["answer"] = answer
+                main.on_message(_event("しんどい"))
+                self.assertIs(main.sessions["U1"].get("safety"), True)
+                main.on_message(_event(main.BURN_WORD))
+                self.assertEqual(_last_text(), main.BURN_REPLY)
+
+    def test_ordinary_replies_do_not_set_safety_flag(self):
+        os.environ["SUPPORT_URL"] = self.URL
+        for answer in ["それはしんどいね。", "寝かしつけ、ほんとに長かったね。", "役所の窓口で手続き、疲れたよね。",
+                       "こころの余裕がなくなるよね。", "自分の居場所がほしくなるよね。"]:
+            with self.subTest(answer=answer):
+                main.sessions.clear()
+                CLAUDE_MODE["answer"] = answer
+                main.on_message(_event("しんどい"))
+                self.assertFalse(main.sessions["U1"].get("safety"))
+                main.on_message(_event(main.BURN_WORD))
+                self.assertIn(self.URL, _last_text())
+
     def test_no_support_link_after_safety_words_even_if_api_fails(self):
         os.environ["SUPPORT_URL"] = self.URL
         CLAUDE_MODE["fail"] = True
