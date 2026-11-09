@@ -100,6 +100,13 @@ def has_safety_words(text: str) -> bool:
     folded = fold_kana(text)
     return any(w in text or w in folded for w in SAFETY_USER_WORDS)
 
+
+def has_safety_markers(answer: str) -> bool:
+    """AI の返事に相談先の案内（SAFETY_REPLY_MARKERS）があるか（部分一致）。元の返事と、両側をそろえた返事の両方で見る。
+    そろえた文はこの中だけで使い、送らず残さない"""
+    folded = fold_kana(answer)
+    return any(m in answer or fold_kana(m) in folded for m in SAFETY_REPLY_MARKERS)
+
 SUPPORT_NOTE = (
     "\n\n――\n"
     "焚き火はこのまま無料で使えます。\n"
@@ -324,7 +331,7 @@ def answer_and_reply(event, user_id: str, msg: dict, history: list[dict], to_sen
     ans_msg = {"role": "assistant", "content": answer}
     with sessions_lock:
         s = sessions.get(user_id)
-        if s is not None and any(m in answer for m in SAFETY_REPLY_MARKERS):
+        if s is not None and has_safety_markers(answer):
             # 返事待ちの間に燃やして新しい会話を始めていても、その会話には応援リンクを出さない
             s["safety"] = True
         if s is not None and s["messages"] is history:
@@ -334,7 +341,7 @@ def answer_and_reply(event, user_id: str, msg: dict, history: list[dict], to_sen
     if not reply(event.reply_token, answer):
         # 届かなかった返事は履歴から外す。元の発言は、危ない言葉が当たるか、届かなかった返事に相談先の案内が
         # 入っていたときだけ残す（次の返事で受け止め直せるように。安全フラグは残す。記録先はメモリの会話だけ）
-        keep = has_safety_words(msg["content"]) or any(k in answer for k in SAFETY_REPLY_MARKERS)
+        keep = has_safety_words(msg["content"]) or has_safety_markers(answer)
         with sessions_lock:
             history[:] = [m for m in history if m is not ans_msg and (keep or m is not msg)]
 

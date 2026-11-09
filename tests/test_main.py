@@ -434,6 +434,36 @@ class TakibiTest(unittest.TestCase):
                 main.on_message(_event(main.BURN_WORD))
                 self.assertIn(self.URL, _last_text())
 
+    def test_reply_with_fullwidth_or_halfwidth_contact_sets_safety_flag(self):
+        # 全角・半角カナで書いた相談先の案内でもフラグが立ち、履歴は元の返事のまま（そろえた文は残さない）
+        os.environ["SUPPORT_URL"] = self.URL
+        for answer in ["１８９に相談できるよ。", "いのちＳＯＳに話してみるのもひとつだよ。",
+                       "ｹｱﾏﾈさんに「限界」と伝えていいんだよ。", "ﾁｬｲﾙﾄﾞﾗｲﾝもあるよ。", "１１０番に電話して。"]:
+            with self.subTest(answer=answer):
+                self.assertFalse(any(m in answer for m in main.SAFETY_REPLY_MARKERS))
+                self.assertTrue(main.has_safety_markers(answer))
+                main.sessions.clear()
+                CLAUDE_MODE["answer"] = answer
+                main.on_message(_event("しんどい"))
+                self.assertIs(main.sessions["U1"]["safety"], True)
+                self.assertEqual(main.sessions["U1"]["messages"][-1], {"role": "assistant", "content": answer})
+                main.on_message(_event(main.BURN_WORD))
+                self.assertEqual(_last_text(), main.BURN_REPLY)
+
+    def test_ordinary_replies_stay_unflagged_after_folding(self):
+        # そろえた後に目印ができてしまわないこと（新しい誤検知の見張り）
+        os.environ["SUPPORT_URL"] = self.URL
+        for answer in ["２時間しか寝てないんだね。", "ケアのことで、ずっと気を張ってたんだね。", "ホッとできる時間がほしいよね。",
+                       "ｿｳﾀﾞﾈ、しんどいね。", "１０時まで起きてたんだね。"]:
+            with self.subTest(answer=answer):
+                self.assertFalse(main.has_safety_markers(answer))
+                main.sessions.clear()
+                CLAUDE_MODE["answer"] = answer
+                main.on_message(_event("しんどい"))
+                self.assertFalse(main.sessions["U1"].get("safety"))
+                main.on_message(_event(main.BURN_WORD))
+                self.assertIn(self.URL, _last_text())
+
     def test_no_support_link_after_safety_words_even_if_api_fails(self):
         os.environ["SUPPORT_URL"] = self.URL
         CLAUDE_MODE["fail"] = True
@@ -1036,6 +1066,13 @@ class TakibiTest(unittest.TestCase):
     def test_reply_failure_keeps_message_when_unseen_answer_had_safety_marker(self):
         # 届かなかった返事に相談先の案内があったときも元の発言は残し、返事（案内）は残さない
         CLAUDE_MODE.update(answer="189に相談できるよ", reply_fail=True)
+        main.on_message(_event("しんどい"))
+        self.assertEqual(main.sessions["U1"]["messages"], [{"role": "user", "content": "しんどい"}])
+        self.assertIs(main.sessions["U1"]["safety"], True)
+
+    def test_reply_failure_keeps_message_when_unseen_answer_had_fullwidth_marker(self):
+        # 届かなかった返事の案内が全角でも、元の発言は残す
+        CLAUDE_MODE.update(answer="１８９に相談できるよ", reply_fail=True)
         main.on_message(_event("しんどい"))
         self.assertEqual(main.sessions["U1"]["messages"], [{"role": "user", "content": "しんどい"}])
         self.assertIs(main.sessions["U1"]["safety"], True)
