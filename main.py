@@ -136,6 +136,7 @@ BURN_REPLY = (
 )
 
 HELP_WORDS = {"使い方"}
+HELP_TRAILING = "。．.！!"  # 「使い方」の文末にあっても説明文を出す記号。？は入れない（docs/backlog.md 2026-11-11）
 
 HELP_TEXT = (
     "【焚き火の使い方】\n"
@@ -272,7 +273,7 @@ def on_message(event: MessageEvent):
         reply(event.reply_token, text_out, with_button=False)
         return
 
-    if text in HELP_WORDS:
+    if text.rstrip(HELP_TRAILING) in HELP_WORDS:  # 判定だけに使い、text は上書きしない
         out = HELP_TEXT + (HELP_SUPPORT_NOTE if support_url() else "")
         reply(event.reply_token, out, with_button=user_id in sessions)
         return

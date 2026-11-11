@@ -540,6 +540,43 @@ class TakibiTest(unittest.TestCase):
             self.assertEqual(_last_text(), main.HELP_TEXT, word)
         self.assertEqual(CLAUDE_CALLS, [])
 
+    def test_help_accepts_trailing_period_or_exclamation(self):
+        # 「？」を足す日は安全審査部の審査に出す（docs/backlog.md 2026-11-11）
+        self.assertEqual(main.HELP_TRAILING, "。．.！!")
+        for word in ["使い方。", "使い方．", "使い方.", "使い方！", "使い方!", "使い方！！",
+                     "使い方。。", " 使い方。 ", "使い方！\u3000", "使い方。\n"]:
+            with self.subTest(word=word):
+                main.sessions.clear()
+                before = len(CLAUDE_CALLS)
+                main.on_message(_event(word))
+                self.assertEqual(_last_text(), main.HELP_TEXT)
+                self.assertEqual(len(CLAUDE_CALLS), before)
+                self.assertNotIn("U1", main.sessions)
+                self.assertIsNone(SENT[-1].messages[0].quick_reply)
+        # 会話がある状態でも会話は変わらず、燃やすボタンが付く
+        main.sessions.clear()
+        main.on_message(_event("愚痴"))
+        updated = main.sessions["U1"]["updated"]
+        main.on_message(_event("使い方。"))
+        self.assertEqual(_last_text(), main.HELP_TEXT)
+        self.assertEqual(len(main.sessions["U1"]["messages"]), 2)
+        self.assertEqual(main.sessions["U1"]["updated"], updated)
+        self.assertIsNotNone(SENT[-1].messages[0].quick_reply)
+
+    def test_help_variants_that_are_not_help_go_to_claude(self):
+        # 「使い方？」「使い方は？」をここから外す日は、同じ差分で審査に出す
+        for word in ["使い方？", "使い方?", "使い方は？", "使い方！？", "使い方 。", "使い方…",
+                     "使い方、", "。使い方", "ヘルプ。", "ヘルプ！", "使い方がわからない。",
+                     "使い方。使い方。"]:
+            with self.subTest(word=word):
+                main.sessions.clear()
+                before = len(CLAUDE_CALLS)
+                main.on_message(_event(word))
+                self.assertEqual(len(CLAUDE_CALLS), before + 1)
+                self.assertEqual(CLAUDE_CALLS[-1]["messages"][-1]["content"], word.strip())
+                self.assertNotEqual(_last_text(), main.HELP_TEXT)
+                self.assertIn("U1", main.sessions)
+
     def test_help_katakana_goes_to_claude(self):
         # 「ヘルプ」はSOSとして送られうるので、説明文ではなくClaudeに回す
         main.on_message(_event("ヘルプ"))
