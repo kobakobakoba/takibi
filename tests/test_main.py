@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import types
+import unicodedata
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1202,6 +1203,18 @@ class TakibiTest(unittest.TestCase):
             self.assertNotIn(forbidden, src, forbidden)
         self.assertEqual(src.count("print("), 1)
         self.assertIn('print("reply failed:", type(e).__name__, flush=True)', src)
+
+    def test_no_fake_hotline_site_in_source_or_fixed_texts(self):
+        # 279338.jp は「よりそいホットライン」を名乗るオンラインカジノの紹介サイトで公式ではない
+        # （docs/research/2026-10-29.md）。相談先の URL を書くなら厚労省「まもろうよ こころ」のページ。
+        # このテストを外す・ゆるめる変更は安全審査に出す
+        with open(main.__file__, encoding="utf-8") as f:
+            src = f.read()
+        self.assertNotIn("279338", unicodedata.normalize("NFKC", src))  # 全角も拾う。おわびの文もここで見る
+        for name in ["SYSTEM_PROMPT", "WELCOME", "HELP_TEXT", "BURN_REPLY",
+                     "SUPPORT_NOTE", "HELP_SUPPORT_NOTE", "APOLOGY_SAFETY_LINE"]:
+            with self.subTest(name=name):
+                self.assertNotIn("279338", unicodedata.normalize("NFKC", getattr(main, name)))
 
     def test_parallel_messages_do_not_crash(self):
         old = time.time() - main.IDLE_SECONDS - 1
