@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ---------- ダミーの外部ライブラリ ----------
 SENT = []          # LINEに返信した内容
 CLAUDE_CALLS = []  # Claudeに送った内容
-CLAUDE_MODE = {"fail": False, "answer": "それはしんどいね。", "during": None, "reply_fail": False}
+CLAUDE_MODE = {"fail": False, "answer": "それはしんどいね。", "during": None, "reply_fail": False, "blocks": None}
 
 
 def _install_fakes():
@@ -90,6 +90,8 @@ def _install_fakes():
                 CLAUDE_MODE["during"]()
             if CLAUDE_MODE["fail"]:
                 raise RuntimeError("api down")
+            if CLAUDE_MODE["blocks"] is not None:
+                return types.SimpleNamespace(content=list(CLAUDE_MODE["blocks"]))
             block = types.SimpleNamespace(type="text", text=CLAUDE_MODE["answer"])
             return types.SimpleNamespace(content=[block])
 
@@ -174,7 +176,7 @@ class TakibiTest(unittest.TestCase):
     def setUp(self):
         SENT.clear()
         CLAUDE_CALLS.clear()
-        CLAUDE_MODE.update(fail=False, answer="それはしんどいね。", during=None, reply_fail=False)
+        CLAUDE_MODE.update(fail=False, answer="それはしんどいね。", during=None, reply_fail=False, blocks=None)
         main.sessions.clear()
         main.inflight.clear()
         os.environ.pop("SUPPORT_URL", None)
@@ -815,6 +817,47 @@ class TakibiTest(unittest.TestCase):
         main.on_message(_event("聞いて"))  # 会話にユーザー発言が残る状態にする（フラグがないと URL が出る）
         main.on_message(_event(main.BURN_WORD))
         self.assertNotIn(self.URL, _last_text())
+
+    # --- AI の返事に考える処理（thinking）のかたまりが混ざっても、返事の文だけを送り、考えは送らず残さない ---
+    THOUGHT = "【内部の考え】利用者は疲れているようだ"
+
+    def _thinking_block(self):
+        # 本物の SDK の形に合わせ、text 属性は持たせない
+        return types.SimpleNamespace(type="thinking", thinking=self.THOUGHT, signature="sig")
+
+    def test_thinking_blocks_are_not_sent_or_kept(self):
+        CLAUDE_MODE["blocks"] = [
+            self._thinking_block(),
+            types.SimpleNamespace(type="redacted_thinking", data="xxx"),
+            types.SimpleNamespace(type="text", text="それはしんどいね。"),
+        ]
+        main.on_message(_event("聞いて"))
+        self.assertEqual(len(SENT), 1)
+        self.assertEqual(_last_text(), "それはしんどいね。")
+        kept = main.sessions["U1"]["messages"]
+        self.assertEqual(kept, [{"role": "user", "content": "聞いて"},
+                                {"role": "assistant", "content": "それはしんどいね。"}])
+        sent_all = "".join(m.text for r in SENT for m in r.messages)
+        kept_all = "".join(m["content"] for m in kept)
+        for s in ("内部の考え", "xxx"):
+            self.assertNotIn(s, sent_all)
+            self.assertNotIn(s, kept_all)
+
+    def test_thinking_only_or_no_content_falls_back_to_apology(self):
+        for blocks in ([self._thinking_block()], []):
+            with self.subTest(blocks=[b.type for b in blocks]):
+                SENT.clear()
+                main.sessions.clear()
+                main.inflight.clear()
+                CLAUDE_MODE["blocks"] = blocks
+                main.on_message(_event("死にたい"))
+                self.assertEqual(len(SENT), 1)
+                t = _last_text()
+                self.assertIn("もう一度", t)
+                self.assertEqual(t.count(main.APOLOGY_SAFETY_LINE), 1)
+                self.assertNotIn("内部の考え", t)
+                self.assertEqual(main.sessions["U1"]["messages"], [])
+                self.assertIs(main.sessions["U1"]["safety"], True)
 
     # --- おわびに 110番・119番の一文を添える（危ない言葉があった会話だけ） ---
     def test_api_failure_after_safety_words_adds_emergency_line(self):
