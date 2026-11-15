@@ -4,6 +4,7 @@
 - 会話はサーバーのメモリにだけ一時保存し、ファイルやDBには残さない
 - 「燃やす」で会話をその場で消去する
 - 返信はすべて Reply API なので、LINEの無料プランでも通数制限にかからない
+- LOADING_ANIMATION=on のときだけ、返事待ちの表示（ローディング）を出す（利用者のIDと秒数だけを送る。通数に数えるかは公式に記載なし）
 """
 import os
 import threading
@@ -34,6 +35,7 @@ BURN_WORD = "燃やす"
 BURN_TRAILING = "。．.！!"  # 「燃やす」の文末にあっても燃やす記号。？・絵文字・ひらがなは入れない（docs/research/2026-11-06.md）
 MAX_TURNS = 20             # 1人あたり保持する発言数の上限
 IDLE_SECONDS = 60 * 60     # 1時間話さなければ、次に話しかけたとき新しい会話にする（前の会話は消える）
+LOADING_SECONDS = 20       # 返事待ちの表示の秒数。5〜60の5の倍数。省略時と同じ20秒。本番の待ち時間を見た数字ではない（docs/research/2026-11-16.md）
 
 # --- PERSONA START: 会社の自動運営で改善してよい範囲 ---
 PERSONA = """あなたはLINEの「焚き火」です。育児や介護をしている人が、誰にも言えない疲れやイライラを吐き出す場所です。
@@ -226,6 +228,22 @@ def reply(reply_token: str, text: str, with_button: bool = True) -> bool:
         return False
 
 
+def show_loading(user_id: str) -> None:
+    """LOADING_ANIMATION=on のときだけ返事待ちの表示を出す。送るのは利用者のIDと秒数だけ。
+    失敗しても何も出さずに戻る（返事は止めない）。ロックは持たず、会話には触らない"""
+    if os.environ.get("LOADING_ANIMATION", "").strip() != "on":
+        return
+    try:
+        # 関数の中で import する（オフのときや、本番の SDK にクラスが無いときに起動を落とさないため）
+        from linebot.v3.messaging import ShowLoadingAnimationRequest
+        with ApiClient(line_config) as api_client:
+            MessagingApi(api_client).show_loading_animation(
+                ShowLoadingAnimationRequest(chat_id=user_id, loading_seconds=LOADING_SECONDS)
+            )
+    except Exception:
+        return
+
+
 @app.post("/callback")
 def callback():
     signature = request.headers.get("X-Line-Signature", "")
@@ -295,6 +313,7 @@ def on_message(event: MessageEvent):
         to_send = list(history)  # ロックの外でほかのスレッドが履歴を変えても、送る内容が乱れないよう写しを送る
         inflight[user_id] = inflight.get(user_id, 0) + 1
     try:
+        show_loading(user_id)
         answer_and_reply(event, user_id, msg, history, to_send)
     finally:
         with sessions_lock:

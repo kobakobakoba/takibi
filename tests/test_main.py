@@ -22,7 +22,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ---------- ダミーの外部ライブラリ ----------
 SENT = []          # LINEに返信した内容
 CLAUDE_CALLS = []  # Claudeに送った内容
-CLAUDE_MODE = {"fail": False, "answer": "それはしんどいね。", "during": None, "reply_fail": False, "blocks": None}
+CLAUDE_MODE = {"fail": False, "answer": "それはしんどいね。", "during": None, "reply_fail": False, "blocks": None,
+               "loading_fail": False}
+LOADING = []       # 返事待ちの表示の要求と、そのときの Claude の呼び出し回数
 
 
 def _install_fakes():
@@ -70,8 +72,14 @@ def _install_fakes():
                 raise RuntimeError("line error: " + req.messages[0].text)
             SENT.append(req)
 
+        def show_loading_animation(self, req):
+            if CLAUDE_MODE["loading_fail"]:
+                # 利用者 ID と発言をわざと例外に入れ、それが出力されないことを確かめる
+                raise RuntimeError("loading error: U-secret 夫が手伝わない")
+            LOADING.append((req, len(CLAUDE_CALLS)))
+
     for name in ["Configuration", "MessageAction", "QuickReply", "QuickReplyItem",
-                 "ReplyMessageRequest", "TextMessage"]:
+                 "ReplyMessageRequest", "TextMessage", "ShowLoadingAnimationRequest"]:
         setattr(messaging, name, type(name, (_Obj,), {}))
     messaging.ApiClient = ApiClient
     messaging.MessagingApi = MessagingApi
@@ -176,13 +184,17 @@ class TakibiTest(unittest.TestCase):
     def setUp(self):
         SENT.clear()
         CLAUDE_CALLS.clear()
-        CLAUDE_MODE.update(fail=False, answer="それはしんどいね。", during=None, reply_fail=False, blocks=None)
+        CLAUDE_MODE.update(fail=False, answer="それはしんどいね。", during=None, reply_fail=False, blocks=None,
+                           loading_fail=False)
+        LOADING.clear()
+        os.environ.pop("LOADING_ANIMATION", None)
         main.sessions.clear()
         main.inflight.clear()
         os.environ.pop("SUPPORT_URL", None)
 
     def tearDown(self):
         os.environ.pop("SUPPORT_URL", None)
+        os.environ.pop("LOADING_ANIMATION", None)
 
     # --- エンドポイント ---
     def test_health_check(self):
@@ -1258,6 +1270,78 @@ class TakibiTest(unittest.TestCase):
                      "SUPPORT_NOTE", "HELP_SUPPORT_NOTE", "APOLOGY_SAFETY_LINE"]:
             with self.subTest(name=name):
                 self.assertNotIn("279338", unicodedata.normalize("NFKC", getattr(main, name)))
+
+    # --- 返事待ちの表示（2026-11-16。初期状態はオフ） ---
+    def test_loading_animation_is_off_by_default(self):
+        for value in [None, "", "off", "1", "true", "ON"]:
+            with self.subTest(value=value):
+                self.setUp()
+                if value is not None:
+                    os.environ["LOADING_ANIMATION"] = value
+                main.on_message(_event("夫が手伝わない"))
+                self.assertEqual(LOADING, [])
+                self.assertEqual(len(SENT), 1)
+                self.assertEqual(_last_text(), "それはしんどいね。")
+
+    def test_loading_animation_sends_only_user_id_and_seconds(self):
+        for value in ["on", " on "]:
+            with self.subTest(value=value):
+                self.setUp()
+                os.environ["LOADING_ANIMATION"] = value
+                main.on_message(_event("夫が手伝わない", user="U9"))
+                self.assertEqual(len(LOADING), 1)
+                req, calls_before = LOADING[0]
+                self.assertEqual(vars(req), {"chat_id": "U9", "loading_seconds": 20})
+                self.assertEqual(calls_before, 0)  # Claude を呼ぶ前に出している
+                for shown in [repr(req), repr(vars(req))]:
+                    self.assertNotIn("夫が手伝わない", shown)
+                self.assertEqual(_last_text(), "それはしんどいね。")
+
+    def test_loading_animation_failure_never_stops_the_reply(self):
+        messaging = sys.modules["linebot.v3.messaging"]
+        saved = messaging.ShowLoadingAnimationRequest
+        for case in ["loading_fail", "old_sdk"]:  # old_sdk：クラスが無い古い SDK のまね
+            with self.subTest(case=case):
+                self.setUp()
+                os.environ["LOADING_ANIMATION"] = "on"
+                if case == "loading_fail":
+                    CLAUDE_MODE["loading_fail"] = True
+                else:
+                    del messaging.ShowLoadingAnimationRequest
+                out, err = io.StringIO(), io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                        main.on_message(_event("もう死にたい"))
+                finally:
+                    messaging.ShowLoadingAnimationRequest = saved
+                self.assertEqual(out.getvalue() + err.getvalue(), "")
+                self.assertEqual(len(CLAUDE_CALLS), 1)
+                self.assertEqual(_last_text(), "それはしんどいね。")
+                self.assertTrue(main.sessions["U1"].get("safety"))
+                self.assertEqual(main.inflight, {})
+                self.assertEqual(LOADING, [])
+        with self.subTest(case="loading_fail_and_api_fail"):
+            self.setUp()
+            os.environ["LOADING_ANIMATION"] = "on"
+            CLAUDE_MODE.update(loading_fail=True, fail=True)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                main.on_message(_event("もう死にたい"))
+            self.assertEqual(out.getvalue() + err.getvalue(), "")
+            self.assertIn("もう一度", _last_text())
+            self.assertIn(main.APOLOGY_SAFETY_LINE, _last_text())
+            self.assertEqual(main.inflight, {})
+
+    def test_loading_animation_only_on_the_ai_path(self):
+        os.environ["LOADING_ANIMATION"] = "on"
+        main.on_message(_event(main.BURN_WORD))
+        main.on_message(_event("使い方"))
+        main.on_follow(types.SimpleNamespace(reply_token="tok"))
+        main.on_unsend(_unsend())
+        self.assertEqual(LOADING, [])
+        self.assertEqual(len(SENT), 3)
+        main.on_message(_event("夫が手伝わない"))
+        self.assertEqual(len(LOADING), 1)
 
     def test_parallel_messages_do_not_crash(self):
         old = time.time() - main.IDLE_SECONDS - 1
