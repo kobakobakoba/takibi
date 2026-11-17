@@ -25,6 +25,7 @@ CLAUDE_CALLS = []  # Claudeに送った内容
 CLAUDE_MODE = {"fail": False, "answer": "それはしんどいね。", "during": None, "reply_fail": False, "blocks": None,
                "loading_fail": False}
 LOADING = []       # 返事待ちの表示の要求と、そのときの Claude の呼び出し回数
+LOADING_KWARGS = []  # 返事待ちの表示の呼び出しに付いたキーワード引数（_request_timeout など）
 
 
 def _install_fakes():
@@ -66,17 +67,19 @@ def _install_fakes():
         def __init__(self, client):
             pass
 
+        # **kwargs は受けない（reply() に _request_timeout などを足すと TypeError で返事のテストが落ちる見張り）
         def reply_message(self, req):
             if CLAUDE_MODE["reply_fail"]:
                 # 送ろうとした文をわざと例外に入れ、それが出力されないことを確かめる
                 raise RuntimeError("line error: " + req.messages[0].text)
             SENT.append(req)
 
-        def show_loading_animation(self, req):
+        def show_loading_animation(self, req, **kwargs):
             if CLAUDE_MODE["loading_fail"]:
                 # 利用者 ID と発言をわざと例外に入れ、それが出力されないことを確かめる
                 raise RuntimeError("loading error: U-secret 夫が手伝わない")
             LOADING.append((req, len(CLAUDE_CALLS)))
+            LOADING_KWARGS.append(kwargs)
 
     for name in ["Configuration", "MessageAction", "QuickReply", "QuickReplyItem",
                  "ReplyMessageRequest", "TextMessage", "ShowLoadingAnimationRequest"]:
@@ -187,6 +190,7 @@ class TakibiTest(unittest.TestCase):
         CLAUDE_MODE.update(fail=False, answer="それはしんどいね。", during=None, reply_fail=False, blocks=None,
                            loading_fail=False)
         LOADING.clear()
+        LOADING_KWARGS.clear()
         os.environ.pop("LOADING_ANIMATION", None)
         main.sessions.clear()
         main.inflight.clear()
@@ -1342,6 +1346,25 @@ class TakibiTest(unittest.TestCase):
         self.assertEqual(len(SENT), 3)
         main.on_message(_event("夫が手伝わない"))
         self.assertEqual(len(LOADING), 1)
+
+    def test_loading_animation_has_a_short_timeout(self):
+        # 2026-11-17：表示の呼び出しにだけ短い上限を付ける（reply() には付けない）
+        self.assertEqual(main.LOADING_TIMEOUT, (2, 3))
+        self.assertIsInstance(main.LOADING_TIMEOUT, tuple)
+        self.assertEqual(len(main.LOADING_TIMEOUT), 2)
+        self.assertTrue(all(t > 0 for t in main.LOADING_TIMEOUT))
+        self.assertLess(sum(main.LOADING_TIMEOUT), main.LOADING_SECONDS)
+        main.on_message(_event("夫が手伝わない", user="U9"))  # オフ（未設定）
+        self.assertEqual(LOADING_KWARGS, [])
+        self.setUp()
+        os.environ["LOADING_ANIMATION"] = "on"
+        main.on_message(_event("夫が手伝わない", user="U9"))
+        self.assertEqual(LOADING_KWARGS, [{"_request_timeout": (2, 3)}])
+        self.assertEqual(len(SENT), 1)
+        self.assertEqual(_last_text(), "それはしんどいね。")
+        self.assertEqual(sorted(vars(SENT[0])), ["messages", "reply_token"])  # 返信要求は今までどおり
+        self.assertEqual(SENT[0].reply_token, "tok")
+        self.assertEqual(len(SENT[0].messages), 1)
 
     def test_parallel_messages_do_not_crash(self):
         old = time.time() - main.IDLE_SECONDS - 1

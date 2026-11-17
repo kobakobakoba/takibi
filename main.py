@@ -36,6 +36,7 @@ BURN_TRAILING = "。．.！!"  # 「燃やす」の文末にあっても燃や�
 MAX_TURNS = 20             # 1人あたり保持する発言数の上限
 IDLE_SECONDS = 60 * 60     # 1時間話さなければ、次に話しかけたとき新しい会話にする（前の会話は消える）
 LOADING_SECONDS = 20       # 返事待ちの表示の秒数。5〜60の5の倍数。省略時と同じ20秒。本番の待ち時間を見た数字ではない（docs/research/2026-11-16.md）
+LOADING_TIMEOUT = (2, 3)   # 返事待ちの表示の呼び出しを待つ上限（接続2秒・読み取り3秒）。表示は返事に要らないので短く。本番の待ち時間を見た数字ではない。reply() には付けない（docs/research/2026-11-17.md）
 
 # --- PERSONA START: 会社の自動運営で改善してよい範囲 ---
 PERSONA = """あなたはLINEの「焚き火」です。育児や介護をしている人が、誰にも言えない疲れやイライラを吐き出す場所です。
@@ -238,7 +239,8 @@ def show_loading(user_id: str) -> None:
         from linebot.v3.messaging import ShowLoadingAnimationRequest
         with ApiClient(line_config) as api_client:
             MessagingApi(api_client).show_loading_animation(
-                ShowLoadingAnimationRequest(chat_id=user_id, loading_seconds=LOADING_SECONDS)
+                ShowLoadingAnimationRequest(chat_id=user_id, loading_seconds=LOADING_SECONDS),
+                _request_timeout=LOADING_TIMEOUT,
             )
     except Exception:
         return
