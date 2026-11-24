@@ -26,6 +26,10 @@ from linebot.v3.messaging import (
     TextMessage,
 )
 from linebot.v3.webhooks import FollowEvent, MessageEvent, TextMessageContent, UnsendEvent
+try:  # 本番の SDK の版に無くても起動を落とさない（docs/research/2026-11-24.md）
+    from linebot.v3.webhooks import UnfollowEvent
+except ImportError:
+    UnfollowEvent = None
 
 LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
@@ -181,7 +185,7 @@ claude = anthropic.Anthropic()  # ANTHROPIC_API_KEY を環境変数から読む
 # user_id -> {"messages": [...], "updated": float}
 sessions: dict[str, dict] = {}
 # sessions を読み書きする短い区間だけで持つ。Claude API の呼び出しと LINE への返信の間は持たない。
-# Lock は同じスレッドで2回取ると詰まるので、ロックを取るのは on_message / on_unsend の中だけにする
+# Lock は同じスレッドで2回取ると詰まるので、ロックを取るのは on_message / on_unsend / on_unfollow の中だけにする
 sessions_lock = threading.Lock()
 # user_id -> 返事待ち（Claude 呼び出し〜返信）の件数。会話の中身は入れない。0 になったらキーごと消す。ログにも出さない
 inflight: dict[str, int] = {}
@@ -274,6 +278,18 @@ def on_unsend(event: UnsendEvent):
     if user_id:
         with sessions_lock:
             sessions.pop(user_id, None)
+
+
+def on_unfollow(event):
+    # ブロック：その人の会話をまるごと消す。返信用トークンがないので返事はしない
+    user_id = getattr(event.source, "user_id", None)
+    if user_id:
+        with sessions_lock:
+            sessions.pop(user_id, None)
+
+
+if UnfollowEvent is not None:
+    handler.add(UnfollowEvent)(on_unfollow)
 
 
 @handler.add(MessageEvent, message=TextMessageContent)

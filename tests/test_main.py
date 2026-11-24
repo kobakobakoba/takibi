@@ -86,7 +86,7 @@ def _install_fakes():
         setattr(messaging, name, type(name, (_Obj,), {}))
     messaging.ApiClient = ApiClient
     messaging.MessagingApi = MessagingApi
-    for name in ["FollowEvent", "MessageEvent", "TextMessageContent", "UnsendEvent"]:
+    for name in ["FollowEvent", "MessageEvent", "TextMessageContent", "UnsendEvent", "UnfollowEvent"]:
         setattr(webhooks, name, type(name, (_Obj,), {}))
 
     exceptions.InvalidSignatureError = InvalidSignatureError
@@ -137,6 +137,11 @@ def _unsend(user="U1"):
     # reply_token を持たせない（返事しようとすると AttributeError で分かる）
     return types.SimpleNamespace(source=types.SimpleNamespace(user_id=user),
                                  unsend=types.SimpleNamespace(message_id="m1"))
+
+
+def _unfollow(user="U1"):
+    # source だけを持たせる（reply_token がないので、返事しようとすると AttributeError で分かる）
+    return types.SimpleNamespace(source=types.SimpleNamespace(user_id=user))
 
 
 def _last_text():
@@ -737,6 +742,73 @@ class TakibiTest(unittest.TestCase):
         self.assertEqual(len(main.sessions["U1"]["messages"]), 2)
         self.assertEqual(len(SENT), sent)
 
+    # --- ブロック（unfollow）：会話を消すだけ。返事・Claude・表示・出力なし（docs/research/2026-11-24.md） ---
+    def test_unfollow_handler_is_registered(self):
+        self.assertIs(main.handler.handlers.get("UnfollowEvent"), main.on_unfollow)
+
+    def test_unfollow_erases_conversation_silently(self):
+        main.on_message(_event("愚痴"))
+        main.inflight["U1"] = 1
+        counts = (len(SENT), len(CLAUDE_CALLS), len(LOADING))
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            main.on_unfollow(_unfollow())
+        self.assertNotIn("U1", main.sessions)
+        self.assertEqual((len(SENT), len(CLAUDE_CALLS), len(LOADING)), counts)
+        self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
+        self.assertEqual(main.inflight, {"U1": 1})
+
+    def test_unfollow_only_erases_that_user(self):
+        main.on_message(_event("1つ目", "A"))
+        main.on_message(_event("2つ目", "B"))
+        main.on_unfollow(_unfollow("A"))
+        self.assertNotIn("A", main.sessions)
+        self.assertEqual(len(main.sessions["B"]["messages"]), 2)
+
+    def test_unfollow_twice_and_without_conversation_is_noop(self):
+        main.on_message(_event("愚痴"))
+        sent = len(SENT)
+        main.on_unfollow(_unfollow())
+        main.on_unfollow(_unfollow())
+        main.on_unfollow(_unfollow("U-none"))
+        self.assertEqual(len(SENT), sent)
+        self.assertEqual(main.sessions, {})
+
+    def test_unfollow_without_user_id_is_noop(self):
+        main.on_message(_event("愚痴"))
+        sent = len(SENT)
+        for ev in [_unfollow(None), types.SimpleNamespace(source=types.SimpleNamespace())]:
+            with self.subTest(ev=ev):
+                main.on_unfollow(ev)
+                self.assertEqual(len(main.sessions["U1"]["messages"]), 2)
+                self.assertEqual(len(SENT), sent)
+
+    def test_unfollow_while_waiting_does_not_block_or_restore(self):
+        CLAUDE_MODE["during"] = lambda: main.on_unfollow(_unfollow())
+        main.on_message(_event("愚痴"))
+        self.assertNotIn("U1", main.sessions)
+        self.assertFalse(main.sessions_lock.locked())
+        self.assertEqual(len(SENT), 1)
+
+    def test_starts_without_unfollow_event_in_sdk(self):
+        import importlib.util
+        webhooks = sys.modules["linebot.v3.webhooks"]
+        saved = webhooks.UnfollowEvent
+        del webhooks.UnfollowEvent
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            spec = importlib.util.spec_from_file_location("main_without_unfollow", main.__file__)
+            mod = importlib.util.module_from_spec(spec)
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                spec.loader.exec_module(mod)
+        finally:
+            webhooks.UnfollowEvent = saved
+        self.assertIsNone(mod.UnfollowEvent)
+        self.assertNotIn("UnfollowEvent", mod.handler.handlers)
+        for name in ["FollowEvent", "UnsendEvent", "MessageEvent"]:
+            self.assertIn(name, mod.handler.handlers)
+        self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
+
     # --- 返事待ちの間に会話が消えても落ちない・復活しない ---
     def test_erased_while_waiting_does_not_crash_or_restore(self):
         CLAUDE_MODE["during"] = lambda: main.sessions.pop("U1", None)
@@ -795,6 +867,8 @@ class TakibiTest(unittest.TestCase):
             main.on_message(ev)
             self.assertFalse(main.sessions_lock.locked())
         main.on_unsend(_unsend())
+        self.assertFalse(main.sessions_lock.locked())
+        main.on_unfollow(_unfollow())
         self.assertFalse(main.sessions_lock.locked())
 
     def test_api_failure_removes_only_own_message(self):
