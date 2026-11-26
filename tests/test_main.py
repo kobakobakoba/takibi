@@ -186,6 +186,13 @@ TATAICHA_SAMPLES = ["なんで今日叩いちゃったんだろう", "叩いち�
                     "タタイチャッタ", "ﾀﾀｲﾁｬｯﾀ"]
 # 受け入れる誤検知（安全審査部 2026-10-15 の条件）。当たってよい＝ORDINARY_COMPLAINTS に入れない
 ACCEPTED_FALSE_POSITIVES_3 = ["夫に軽口を叩いちゃった"]
+# 2026-11-27：漢字だけだった語のひらがな形（どの文も、変更前の52語には、そろえた後も当たらない）
+ADDED_SAFETY_SAMPLES_4 = {"じさつ": "もうじさつしか考えられない", "ぎゃくたい": "これってぎゃくたいなのかな"}
+KANA_JISATSU_SAMPLES = ["じさつ", "ジサツ", "ｼﾞｻﾂ", "ぎゃくたい", "ギャクタイ", "ｷﾞｬｸﾀｲ",
+                        "もうじさつしか考えられない", "これってギャクタイなのかな"]
+NOT_JISATSU_SAMPLES = ["ぎゃくに助かった", "おべんとうをじさんした"]
+# 受け入れる誤検知（安全審査部 2026-11-26 の注意）。当たってよい＝ORDINARY_COMPLAINTS に入れない
+ACCEPTED_FALSE_POSITIVES_4 = ["おやじさつまいも好き"]
 
 
 class TakibiTest(unittest.TestCase):
@@ -1129,10 +1136,10 @@ class TakibiTest(unittest.TestCase):
 
     # --- 危ない言葉の一覧（2026-10-16 追加分：叩いちゃ・たたいちゃ） ---
     def test_added_safety_words_3_are_in_list(self):
-        self.assertEqual(len(main.SAFETY_USER_WORDS), 52)
+        self.assertEqual(len(main.SAFETY_USER_WORDS), 54)
         self.assertEqual(len(set(main.SAFETY_USER_WORDS)), len(main.SAFETY_USER_WORDS))
         self.assertEqual(main.SAFETY_USER_WORDS[38:50], list(ADDED_SAFETY_SAMPLES_2))
-        self.assertEqual(main.SAFETY_USER_WORDS[50:], list(ADDED_SAFETY_SAMPLES_3))
+        self.assertEqual(main.SAFETY_USER_WORDS[50:52], list(ADDED_SAFETY_SAMPLES_3))
         for word, sentence in ADDED_SAFETY_SAMPLES_3.items():
             self.assertIn(word, sentence)
 
@@ -1145,6 +1152,49 @@ class TakibiTest(unittest.TestCase):
                 self.assertIs(main.sessions["U1"].get("safety"), True)
                 self.assertEqual(len(SENT), 1)
                 self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+
+    # --- 危ない言葉の一覧（2026-11-27 追加分：じさつ・ぎゃくたい） ---
+    def test_added_safety_words_4_are_in_list(self):
+        self.assertEqual(len(main.SAFETY_USER_WORDS), 54)
+        self.assertEqual(len(set(main.SAFETY_USER_WORDS)), len(main.SAFETY_USER_WORDS))
+        self.assertEqual(main.SAFETY_USER_WORDS[52:], ["じさつ", "ぎゃくたい"])
+        self.assertEqual(main.SAFETY_USER_WORDS[52:], list(ADDED_SAFETY_SAMPLES_4))
+        for word, sentence in ADDED_SAFETY_SAMPLES_4.items():
+            self.assertIn(word, sentence)
+
+    def test_kana_jisatsu_samples_set_flag_and_emergency_line(self):
+        old = main.SAFETY_USER_WORDS[:52]
+        for s in KANA_JISATSU_SAMPLES:
+            with self.subTest(text=s):
+                self.assertFalse(any(w in s or w in main.fold_kana(s) for w in old))
+                self.assertTrue(main.has_safety_words(s))
+                self._send_fresh(s)
+                self.assertIs(main.sessions["U1"].get("safety"), True)
+                self.assertEqual(len(SENT), 1)
+                self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 1)
+
+    def test_not_jisatsu_samples_do_not_set_flag(self):
+        for s in NOT_JISATSU_SAMPLES:
+            with self.subTest(text=s):
+                self.assertFalse(main.has_safety_words(s))
+                self._send_fresh(s)
+                self.assertFalse(main.sessions["U1"].get("safety"))
+                self.assertEqual(_last_text().count(main.APOLOGY_SAFETY_LINE), 0)
+
+    def test_accepted_false_positive_oyaji_satsumaimo(self):
+        for s in ACCEPTED_FALSE_POSITIVES_4:
+            with self.subTest(text=s):
+                self.assertTrue(main.has_safety_words(s))
+                self.assertNotIn(s, ORDINARY_COMPLAINTS)
+
+    def test_folded_jisatsu_is_not_sent_or_stored(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            main.on_message(_event("ジサツ"))
+        self.assertEqual(CLAUDE_CALLS[-1]["messages"][-1]["content"], "ジサツ")
+        self.assertEqual(main.sessions["U1"]["messages"][0]["content"], "ジサツ")
+        self.assertIs(main.sessions["U1"].get("safety"), True)
+        self.assertEqual(out.getvalue() + err.getvalue(), "")
 
     def test_accepted_false_positive_karukuchi(self):
         for s in ACCEPTED_FALSE_POSITIVES_3:
